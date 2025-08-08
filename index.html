@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="ar">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>BTC Up/Down — Unified Expected Move</title>
+<title>BTC Up/Down — Unified EM + Signed Score</title>
 <script src="https://cdn.jsdelivr.net/npm/luxon@3/build/global/luxon.min.js"></script>
 <style>
   :root{--bg:#0f172a;--card:#111827;--panel:#0b1020;--text:#e5e7eb;--muted:#9ca3af;--green:#22c55e;--red:#ef4444;}
@@ -19,8 +19,9 @@
 </style>
 </head>
 <body>
-<h1>BTC Up/Down — Unified EM</h1>
+<h1>BTC Up/Down — Unified EM + Signed Score</h1>
 <div class="card">
+
   <div class="row"><span class="label">BTC Price</span><span class="val" id="btc">—</span></div>
   <div class="row"><span class="label">Price to Beat</span><span class="val" id="ptb">—</span></div>
 
@@ -32,6 +33,8 @@
   <div class="row"><span class="label">Reach PTB (Δ vs 50%)</span><span class="val" id="reach">—</span></div>
   <div class="row"><span class="label">Up %</span><span class="val" id="upPct">—</span></div>
   <div class="row"><span class="label">Down %</span><span class="val" id="downPct">—</span></div>
+
+  <div class="row"><span class="label">Signed Score (−100..+100)</span><span class="val" id="scoreSigned">—</span></div>
 
   <div class="foot" id="stamp">Initializing…</div>
   <div class="foot">Live: Binance WebSocket · Klines: 1m/1h (REST) · Times: America/New_York (ET)</div>
@@ -93,7 +96,7 @@ function computeATR1m(klines,len=ATR_LEN){
   return last.reduce((s,x)=>s+x,0)/last.length; // $/min
 }
 function bsExpectedMoveUSD(S, sigmaDolPerMin, minsLeft){
-  if(!(S>0)&&!(sigmaDolPerMin>0)) return null;
+  if(!(S>0) || !(sigmaDolPerMin>0)) return null;
   const sigmaAnn=(sigmaDolPerMin/S)*Math.sqrt(MINUTES_PER_YEAR);
   const T=Math.max(0,minsLeft)/MINUTES_PER_YEAR;
   return S*sigmaAnn*Math.sqrt(T); // $
@@ -182,6 +185,7 @@ function render(){
   const reachEl=document.getElementById('reach');
   const upEl=document.getElementById('upPct');
   const dnEl=document.getElementById('downPct');
+  const scoreEl=document.getElementById('scoreSigned');
 
   btcEl.textContent=fmt(S,2);
   ptbEl.textContent=fmt(PTB,2);
@@ -199,27 +203,35 @@ function render(){
 
   emCombEl.textContent = emCombined!=null ? fmt(emCombined,2) : '—';
 
-  // احتمالات باستخدام EM_combined
+  // احتمالات + Signed Score باستخدام EM_combined
   if(S!=null && PTB!=null && emCombined!=null && emCombined>0){
     const z=(PTB - S)/emCombined;
-    const reach=1 - normCdf(z);
-    const up=reach, down=1-reach;
+    const p=1 - normCdf(z);            // احتمال الإغلاق ≥ PTB
+    const up=p, down=1-p;
 
-    let reachDiff=(reach*100)-50;
+    // Reach كفرق عن 50% (+/-) وملوّن
+    let reachDiff=(p*100)-50;
     const sign=reachDiff>0?'+':(reachDiff<0?'−':'');
     reachEl.textContent=`${sign}${Math.abs(reachDiff).toFixed(1)}% (z = ${z.toFixed(2)})`;
     reachEl.className=`val ${reachDiff>0?'green':(reachDiff<0?'red':'')}`;
 
+    // Up/Down (مع سناب للتعادل)
     let upPct=up*100, downPct=down*100;
-    if (Math.abs(upPct-50)<0.5){ upPct=50; downPct=50; } // سناب للتعادل
+    if (Math.abs(upPct-50)<0.5){ upPct=50; downPct=50; }
     upEl.textContent=upPct.toFixed(1)+'%';
     dnEl.textContent=downPct.toFixed(1)+'%';
     if(upPct>downPct){ upEl.className='val green'; dnEl.className='val'; }
     else if(downPct>upPct){ dnEl.className='val red'; upEl.className='val'; }
     else { upEl.className='val'; dnEl.className='val'; }
+
+    // Signed Score −100..+100
+    const scoreSigned = (p - 0.5) * 200;
+    scoreEl.textContent = scoreSigned.toFixed(1);
+    scoreEl.className = `val ${scoreSigned>0?'green':(scoreSigned<0?'red':'')}`;
   }else{
     reachEl.textContent='—'; reachEl.className='val';
     upEl.textContent='—'; dnEl.textContent='—'; upEl.className='val'; dnEl.className='val';
+    scoreEl.textContent='—'; scoreEl.className='val';
   }
 
   document.getElementById('stamp').textContent=
