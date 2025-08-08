@@ -1,174 +1,139 @@
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
 <title>Polymarket BTC Helper (Web)</title>
+<script src="https://cdn.jsdelivr.net/npm/luxon@3/build/global/luxon.min.js"></script>
 <style>
-  :root{--bg:#0f172a;--card:#111827;--text:#e5e7eb;--muted:#9ca3af;--accent:#22c55e;--danger:#ef4444;}
-  body{font-family:system-ui,Arial,Segoe UI; background:var(--bg); color:var(--text); margin:0; padding:24px;}
+  :root{--bg:#0f172a;--card:#111827;--text:#e5e7eb;--muted:#9ca3af;}
+  body{font-family:system-ui,Arial; background:var(--bg); color:var(--text); margin:0; padding:24px;}
   h1{font-size:22px;text-align:center;margin:0 0 14px}
   .wrap{max-width:520px;margin:0 auto}
-  .card{background:var(--card);border-radius:14px;padding:16px;box-shadow:0 4px 20px rgba(0,0,0,.25)}
+  .card{background:var(--card);border-radius:14px;padding:16px}
   label{display:block;font-size:13px;color:var(--muted);margin:10px 0 6px}
-  input{width:100%;padding:10px 12px;border-radius:10px;border:1px solid #374151;background:#0b1020;color:var(--text)}
-  button{width:100%;padding:12px;border:0;border-radius:12px;font-weight:700;margin-top:12px;cursor:pointer}
-  .btn{background:#2563eb;color:#fff}
+  input,button{width:100%;padding:12px;border-radius:10px;border:1px solid #374151;background:#0b1020;color:var(--text)}
+  button{border:0;background:#2563eb;font-weight:700;margin-top:12px;cursor:pointer}
   .row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
   .kpi{display:grid;grid-template-columns:1fr auto;gap:6px;padding:10px;border-radius:10px;background:#0b1020;margin-top:10px}
   .kpi b{font-size:16px}
-  .ok{color:var(--accent)} .bad{color:var(--danger)}
-  .muted{color:var(--muted);font-size:12px}
   .foot{margin-top:10px;font-size:12px;color:var(--muted);text-align:center}
 </style>
 </head>
 <body>
-  <div class="wrap">
-    <h1>BTC Up/Down Helper</h1>
-    <div class="card">
-      <div class="row">
-        <div>
-          <div class="kpi"><span>BTC (USDT)</span><b id="btcPrice">—</b></div>
-        </div>
-        <div>
-          <div class="kpi"><span>Minutes Left (ET)</span><b id="minsLeft">—</b></div>
-        </div>
-      </div>
-
-      <div class="kpi"><span>Price to Beat (1h open)</span><b id="ptb">—</b></div>
-      <div class="kpi"><span>Volatility / min</span><b id="volMin">—</b></div>
-      <div class="kpi"><span>Expected Move</span><b id="expMove">—</b></div>
-
-      <label>Current Up Price (from Polymarket)</label>
-      <input id="upPrice" type="number" step="0.01" placeholder="e.g. 0.62 (62¢)" />
-
-      <button class="btn" id="calcBtn">Calculate</button>
-
-      <div class="row">
-        <div class="kpi"><span>Up %</span><b id="upPct">—</b></div>
-        <div class="kpi"><span>Down %</span><b id="downPct">—</b></div>
-      </div>
-      <div class="kpi"><span>Signal</span><b id="signal">—</b></div>
-
-      <div class="foot" id="stamp">—</div>
-      <div class="foot">Data: Binance (public API). Times computed in America/New_York (ET).</div>
+<div class="wrap">
+  <h1>BTC Up/Down Helper</h1>
+  <div class="card">
+    <div class="row">
+      <div class="kpi"><span>BTC (USDT)</span><b id="btcPrice">—</b></div>
+      <div class="kpi"><span>Minutes Left (ET)</span><b id="minsLeft">—</b></div>
     </div>
+
+    <div class="kpi"><span>Price to Beat (1h open)</span><b id="ptb">—</b></div>
+    <div class="kpi"><span>Volatility / min</span><b id="volMin">—</b></div>
+    <div class="kpi"><span>Expected Move</span><b id="expMove">—</b></div>
+
+    <label>Current Up Price (from Polymarket)</label>
+    <input id="upPrice" type="number" step="0.01" placeholder="e.g. 0.62 (62¢)" />
+    <button id="calcBtn">Calculate</button>
+
+    <div class="row">
+      <div class="kpi"><span>Up %</span><b id="upPct">—</b></div>
+      <div class="kpi"><span>Down %</span><b id="downPct">—</b></div>
+    </div>
+    <div class="kpi"><span>Signal</span><b id="signal">—</b></div>
+
+    <div class="foot" id="stamp">—</div>
+    <div class="foot">Data: Binance (public). Times computed in America/New_York (ET).</div>
   </div>
+</div>
 
 <script>
-// --- helpers ---
-const sleep = (ms)=>new Promise(r=>setTimeout(r,ms));
-const fmt = (n, d=2) => Number.isFinite(n) ? n.toFixed(d) : "—";
-
-function nowET() {
-  // Convert current UTC to America/New_York using Intl
-  const fmt = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York',
-    year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false });
-  const parts = fmt.formatToParts(new Date());
-  const get = k => parts.find(p=>p.type===k).value;
-  const iso = `${get('year')}-${get('month')}-${get('day')}T${get('hour')}:${get('minute')}:${get('second')}Z`;
-  // Parse as if it's UTC string (we only need local components for floor-to-hour)
-  const d = new Date(iso);
-  // Make a date with those local components but in ET offset via workaround
-  return d; // We only use components via Intl again below
-}
+const { DateTime } = luxon;
+const fmt = (n,d=2)=>Number.isFinite(n)?n.toFixed(d):"—";
 
 function getHourWindowET(){
-  // Recompute via Intl pieces to find hour start/end in ET
-  const tz = 'America/New_York';
-  const fmt = new Intl.DateTimeFormat('en-US', { timeZone: tz, hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false, year:'numeric', month:'2-digit', day:'2-digit' });
-  const parts = fmt.formatToParts(new Date());
-  const val = k => parts.find(p=>p.type===k).value;
-  const y = +val('year'), m = +val('month'), d = +val('day'), h = +val('hour');
-  const start = new Date(Date.UTC(y, m-1, d, h, 0, 0));
-  const end   = new Date(Date.UTC(y, m-1, d, h+1, 0, 0));
-  const nowU  = new Date(); // UTC-ish
-  const minsLeft = Math.max(0, Math.floor((end - nowU)/60000));
-  return {startUTC: start.getTime(), endUTC: end.getTime(), minsLeft};
+  const nowET   = DateTime.now().setZone('America/New_York');
+  const startET = nowET.startOf('hour');
+  const endET   = startET.plus({hours:1});
+  const startMsUTC = startET.toUTC().toMillis();
+  const minsLeft = Math.max(0, Math.floor(endET.diff(nowET,'minutes').minutes));
+  return {startMsUTC, minsLeft};
 }
 
-// --- Binance fetchers ---
-async function fetchBTC() {
+async function fetchBTC(){
   const r = await fetch('https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT');
   const j = await r.json();
   return parseFloat(j.price);
 }
 
-async function fetchHourOpen(startMs, endMs) {
-  const url = `https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1h&startTime=${startMs}&endTime=${endMs}&limit=1`;
+// 👇 التعديل المهم: نمرّر startTime فقط و limit=1
+async function fetchHourOpen(startMs){
+  const url = `https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1h&startTime=${startMs}&limit=1`;
   const r = await fetch(url);
   const j = await r.json();
-  if (Array.isArray(j) && j.length) return parseFloat(j[0][1]); // open
-  return null;
+  return (Array.isArray(j) && j.length) ? parseFloat(j[0][1]) : null; // open
 }
 
 async function fetchVolPerMin(lookbackMins){
   const n = Math.max(1, Math.min(1000, lookbackMins||15));
   const url = `https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1m&limit=${n}`;
   const r = await fetch(url);
-  const data = await r.json();
-  if (!Array.isArray(data) || !data.length) return 5;
-  const highs = data.map(c=>+c[2]);
-  const lows  = data.map(c=>+c[3]);
-  const vol = (Math.max(...highs) - Math.min(...lows)) / Math.max(1, lookbackMins||15);
-  return vol;
+  const d = await r.json();
+  if(!Array.isArray(d)||!d.length) return 5;
+  const highs = d.map(c=>+c[2]), lows = d.map(c=>+c[3]);
+  return (Math.max(...highs)-Math.min(...lows))/Math.max(1,(lookbackMins||15));
 }
 
-// --- Core calc ---
-function computeFair(currentPrice, priceToBeat, minutesLeft, volPerMin, upMarketPrice){
-  const expectedMove = volPerMin * Math.max(1, minutesLeft);
-  const gapImpact = expectedMove ? (priceToBeat - currentPrice) / expectedMove : 0;
-  // Heuristic to map to 0..1 then to %
+function computeFair(current, ptb, minsLeft, volMin, upMarket){
+  const expectedMove = volMin * Math.max(1, minsLeft||1);
+  const gapImpact = expectedMove ? (ptb - current)/expectedMove : 0;
   let fairUp = Math.max(0, Math.min(1, 0.5 + gapImpact/100));
-  let fairDown = 1 - fairUp;
+  const fairDown = 1 - fairUp;
   const fairUpPct = +(fairUp*100).toFixed(1);
   const fairDownPct = +(fairDown*100).toFixed(1);
-  const diff = fairUp - (isNaN(upMarketPrice)?0.5:upMarketPrice);
+  const m = isNaN(upMarket) ? 0.5 : upMarket;
+  const diff = fairUp - m;
   let signal = "⚪ Neutral";
   if (diff > 0.15) signal = "🟢 Buy Up";
   else if (diff < -0.15) signal = "🔴 Sell Up";
   return {expectedMove, fairUpPct, fairDownPct, signal};
 }
 
-// --- UI glue ---
-async function refreshOnce(){
+async function refresh(){
   try{
-    const {startUTC, endUTC, minsLeft} = getHourWindowET();
+    const {startMsUTC, minsLeft} = getHourWindowET();
     const [price, ptb, volMin] = await Promise.all([
       fetchBTC(),
-      fetchHourOpen(startUTC, endUTC),
+      fetchHourOpen(startMsUTC),
       fetchVolPerMin(minsLeft || 15)
     ]);
 
     document.getElementById('btcPrice').textContent = fmt(price,2);
-    document.getElementById('ptb').textContent      = ptb ? fmt(ptb,2) : '—';
+    document.getElementById('ptb').textContent = ptb?fmt(ptb,2):'—';
     document.getElementById('minsLeft').textContent = minsLeft;
-    document.getElementById('volMin').textContent   = fmt(volMin,3);
+    document.getElementById('volMin').textContent = fmt(volMin,3);
 
-    // if user already typed a market up price, compute immediately
     const upM = parseFloat(document.getElementById('upPrice').value);
     const {expectedMove, fairUpPct, fairDownPct, signal} =
       computeFair(price, ptb ?? price, minsLeft, volMin, upM);
 
     document.getElementById('expMove').textContent = fmt(expectedMove,3);
-    document.getElementById('upPct').textContent   = fairUpPct + '%';
+    document.getElementById('upPct').textContent = fairUpPct + '%';
     document.getElementById('downPct').textContent = fairDownPct + '%';
-    document.getElementById('signal').textContent  = signal;
+    document.getElementById('signal').textContent = signal;
 
     const t = new Date().toISOString().replace('T',' ').slice(0,19);
-    document.getElementById('stamp').textContent = `Last update: ${t} UTC | Window (ET) open price used`;
+    document.getElementById('stamp').textContent = `Last update: ${t} UTC | Open = Binance 1h @ ET hour start`;
   }catch(e){
-    document.getElementById('stamp').textContent = 'Error fetching data. Try again.';
+    document.getElementById('stamp').textContent = 'Error fetching data';
     console.error(e);
   }
 }
 
-document.getElementById('calcBtn').addEventListener('click', refreshOnce);
-
-// auto refresh every 30s
-refreshOnce();
-setInterval(refreshOnce, 30000);
+document.getElementById('calcBtn').addEventListener('click', refresh);
+refresh();
+setInterval(refresh, 30000);
 </script>
 </body>
 </html>
