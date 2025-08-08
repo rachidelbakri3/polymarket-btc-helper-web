@@ -1,15 +1,16 @@
 <!DOCTYPE html>
-<html lang="ar">
+<html lang="ar" dir="rtl">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>BTC Up/Down — Unified EM + Signed Score</title>
+<title>BTC Up/Down — BS Only (MM:SS)</title>
 <script src="https://cdn.jsdelivr.net/npm/luxon@3/build/global/luxon.min.js"></script>
 <style>
   :root{--bg:#0f172a;--card:#111827;--panel:#0b1020;--text:#e5e7eb;--muted:#9ca3af;--green:#22c55e;--red:#ef4444;}
+  *{box-sizing:border-box}
   body{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,Arial;padding:22px}
   h1{margin:0 0 14px;text-align:center}
-  .card{max-width:620px;margin:0 auto;background:var(--card);border-radius:14px;padding:16px}
+  .card{max-width:640px;margin:0 auto;background:var(--card);border-radius:14px;padding:16px}
   .row{display:flex;justify-content:space-between;gap:8px;background:var(--panel);border-radius:12px;padding:12px;margin-top:10px}
   .label{color:var(--muted)}
   .val{font-weight:700}
@@ -19,234 +20,215 @@
 </style>
 </head>
 <body>
-<h1>BTC Up/Down — Unified EM + Signed Score</h1>
-<div class="card">
+<h1>BTC Up/Down — Black-Scholes Only</h1>
 
-  <div class="row"><span class="label">BTC Price</span><span class="val" id="btc">—</span></div>
+<div class="card">
+  <div class="row"><span class="label">سعر BTC</span><span class="val" id="btc">—</span></div>
   <div class="row"><span class="label">Price to Beat</span><span class="val" id="ptb">—</span></div>
 
-  <div class="row"><span class="label">Expected Move ($)</span><span class="val" id="emComb">—</span></div>
+  <div class="row"><span class="label">Expected Move ($)</span><span class="val" id="em">—</span></div>
 
-  <div class="row"><span class="label">Minutes Left (ET)</span><span class="val" id="mins">—</span></div>
+  <div class="row"><span class="label">الوقت المتبقي (ET)</span><span class="val" id="mins">—</span></div>
   <div class="row"><span class="label">Gap to Beat ($)</span><span class="val" id="gap">—</span></div>
 
-  <div class="row"><span class="label">Reach PTB (Δ vs 50%)</span><span class="val" id="reach">—</span></div>
   <div class="row"><span class="label">Up %</span><span class="val" id="upPct">—</span></div>
   <div class="row"><span class="label">Down %</span><span class="val" id="downPct">—</span></div>
 
-  <div class="row"><span class="label">Signed Score (−100..+100)</span><span class="val" id="scoreSigned">—</span></div>
-
   <div class="foot" id="stamp">Initializing…</div>
-  <div class="foot">Live: Binance WebSocket · Klines: 1m/1h (REST) · Times: America/New_York (ET)</div>
+  <div class="foot">المصدر: Binance WebSocket · الكلاينز: 1m/1h (REST) · التوقيت: America/New_York (ET)</div>
 </div>
 
 <script>
 const { DateTime } = luxon;
-const fmt=(n,d=2)=>Number.isFinite(n)?n.toFixed(d):"—";
-const MINUTES_PER_YEAR=525600;
-const VOL_WINDOW_MINS=60;   // STD Δclose للـ BS
-const ATR_LEN=14;           // ATR دقائق
-// أوزان الدمج (تقدر تغيّرها لاحقًا)
-const W_BS=0.6, W_ATR=0.4;
+const fmt = (n,d=2)=>Number.isFinite(n)?n.toFixed(d):"—";
 
-let S=null, PTB=null, minutesLeft=0;
-let sigmaDollarPerMin=null;   // من std(Δclose_1m)
-let atrPerMin=null;           // ATR لكل دقيقة
-let emBS=null, emATR=null, emCombined=null;
-let lastVolMinute=null, currHourStartUTCms=null;
+// إعدادات
+const LOOKBACK_MIN = 60;       // نافذة التذبذب بالدقائق (يمكن تغييرها)
+const SEC_UPDATE_MS = 200;     // سرعة تحديث الوقت
+const VOL_REFRESH_MS = 4000;   // كل كم نحدّث التذبذب
+const EPS = 1e-9;
 
-/* ===== وقت الساعة (ET) ===== */
-function getHourWindowET(){
-  const nowET=DateTime.now().setZone('America/New_York');
-  const startET=nowET.startOf('hour');
-  const endET=startET.plus({hours:1});
-  return {startMsUTC:startET.toUTC().toMillis(), minsLeft:Math.max(0,Math.floor(endET.diff(nowET,'minutes').minutes))};
+let S = null;                  // السعر الحالي
+let PTB = null;                // سعر الافتتاح للساعة (هدف الرهان)
+let secondsLeft = 0;           // الوقت المتبقي بالثواني
+let sigmaDollarPerMin = null;  // std(diff(close_1m)) بالدولار لكل دقيقة
+let emBS = null;               // Expected Move بالدولار (Black-Scholes فقط)
+let currHourStartUTCms = null;
+let lastVolRefreshAt = 0;
+
+/* ========== أدوات الوقت (ET) ========== */
+function getETWindow(){
+  const nowET = DateTime.now().setZone('America/New_York');
+  const start = nowET.startOf('hour');
+  const end   = start.plus({hours:1});
+  const secsLeft = Math.max(0, Math.floor(end.diff(nowET,'seconds').seconds));
+  return { startMsUTC: start.toUTC().toMillis(), secsLeft };
+}
+function toMMSS(secs){
+  const m = Math.floor(secs/60);
+  const s = secs % 60;
+  return `${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
 }
 
-/* ===== REST ===== */
+/* ========== REST ========== */
 async function fetchHourOpen(startMs){
-  const url=`https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1h&startTime=${startMs}&limit=1`;
-  const r=await fetch(url); const j=await r.json();
-  return (Array.isArray(j)&&j.length)?+j[0][1]:null;
+  const url = `https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1h&startTime=${startMs}&limit=1`;
+  const r = await fetch(url);
+  const j = await r.json();
+  return (Array.isArray(j) && j.length) ? +j[0][1] : null;  // open
 }
 async function fetch1mKlines(limit){
-  const url=`https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1m&limit=${limit}`;
-  const r=await fetch(url); const data=await r.json();
-  return Array.isArray(data)?data:null;
+  const url = `https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1m&limit=${limit}`;
+  const r = await fetch(url);
+  const j = await r.json();
+  return Array.isArray(j) ? j : null;
 }
 
-/* ===== الحِسابات ===== */
-function stdPopulation(a){ if(!a||a.length<2) return null;
-  const m=a.reduce((x,y)=>x+y,0)/a.length;
-  const v=a.reduce((s,x)=>s+(x-m)*(x-m),0)/a.length;
-  return Math.sqrt(v);
+/* ========== إحصاءات ========== */
+function stdPopulation(arr){
+  if(!arr || arr.length < 2) return null;
+  const mean = arr.reduce((a,b)=>a+b,0) / arr.length;
+  const varc = arr.reduce((s,x)=> s + (x-mean)*(x-mean), 0) / arr.length;
+  return Math.sqrt(varc);
 }
 function dollarVolPerMinFromCloses(closes){
-  const diffs=[]; for(let i=1;i<closes.length;i++) diffs.push(closes[i]-closes[i-1]);
+  const diffs = [];
+  for(let i=1;i<closes.length;i++) diffs.push(closes[i]-closes[i-1]);
   return stdPopulation(diffs);
 }
-function computeATR1m(klines,len=ATR_LEN){
-  if(!klines||klines.length<len+1) return null;
-  const TR=[];
-  for(let i=1;i<klines.length;i++){
-    const prevClose=+klines[i-1][4], high=+klines[i][2], low=+klines[i][3];
-    TR.push(Math.max(high-low, Math.abs(high-prevClose), Math.abs(low-prevClose)));
-  }
-  const last=TR.slice(-len);
-  return last.reduce((s,x)=>s+x,0)/last.length; // $/min
-}
-function bsExpectedMoveUSD(S, sigmaDolPerMin, minsLeft){
-  if(!(S>0) || !(sigmaDolPerMin>0)) return null;
-  const sigmaAnn=(sigmaDolPerMin/S)*Math.sqrt(MINUTES_PER_YEAR);
-  const T=Math.max(0,minsLeft)/MINUTES_PER_YEAR;
-  return S*sigmaAnn*Math.sqrt(T); // $
-}
-function atrMoveUSD(atrPerMin, minsLeft){
-  if(!(atrPerMin>0)) return null;
-  return atrPerMin*Math.sqrt(Math.max(1,minsLeft)); // $ (افتراض استقلال)
-}
-// دمج RMS بوزنَيْن
-function combineRMS(emBS, emATR){
-  if(emBS>0 && emATR>0) return Math.sqrt(W_BS*emBS*emBS + W_ATR*emATR*emATR);
-  return emBS>0 ? emBS : (emATR>0 ? emATR : null);
-}
 
-/* ===== CDF طبيعي ===== */
+/* ========== CDF طبيعي ========== */
 function normCdf(z){
-  const t=1/(1+0.2316419*Math.abs(z));
-  const d=0.3989423*Math.exp(-0.5*z*z);
-  let p=1-d*(1.330274*t-1.821256*t**2+1.781478*t**3-0.356564*t**4+0.3193815*t**5);
-  return z>=0?p:1-p;
+  // تقريب سريع
+  const t = 1/(1+0.2316419*Math.abs(z));
+  const d = 0.3989423*Math.exp(-0.5*z*z);
+  let p = 1 - d*(1.330274*t - 1.821256*t**2 + 1.781478*t**3 - 0.356564*t**4 + 0.3193815*t**5);
+  return z>=0 ? p : 1-p;
 }
 
-/* ===== سعر مباشر ===== */
+/* ========== WebSocket للسعر ========== */
 function startWS(){
-  const ws=new WebSocket("wss://stream.binance.com:9443/ws/btcusdt@trade");
-  ws.onmessage=(ev)=>{
-    const {p}=JSON.parse(ev.data);
-    const price=parseFloat(p);
+  const ws = new WebSocket("wss://stream.binance.com:9443/ws/btcusdt@trade");
+  ws.onmessage = (ev)=>{
+    const { p } = JSON.parse(ev.data);
+    const price = parseFloat(p);
     if(Number.isFinite(price)){
-      S=price;
-      // أعِد حساب الحركات
-      if(sigmaDollarPerMin!=null) emBS = bsExpectedMoveUSD(S, sigmaDollarPerMin, minutesLeft);
-      if(atrPerMin!=null)         emATR= atrMoveUSD(atrPerMin, minutesLeft);
-      emCombined=combineRMS(emBS, emATR);
+      S = price;
+      recomputeEM();
       render();
     }
   };
-  ws.onclose=()=>setTimeout(startWS,1500);
+  ws.onclose = ()=> setTimeout(startWS, 1200);
 }
 
-/* ===== جداول زمنية ===== */
-async function everySecond(){
-  const {startMsUTC, minsLeft}=getHourWindowET();
-  minutesLeft=minsLeft;
-  if(currHourStartUTCms!==startMsUTC){
-    currHourStartUTCms=startMsUTC;
-    PTB=await fetchHourOpen(startMsUTC);
+/* ========== حساب EM (Black-Scholes فقط) ==========
+   EM_BS = sigma_$perMin * sqrt(minutes_left)
+   ومع اقتراب الوقت لنهاية الساعة → EM→0 تلقائياً
+*/
+function recomputeEM(){
+  if(sigmaDollarPerMin!=null){
+    const minutesLeft = Math.max(0, secondsLeft/60);
+    emBS = sigmaDollarPerMin * Math.sqrt(minutesLeft);
+  }else{
+    emBS = null;
   }
-  if(S!=null){
-    if(sigmaDollarPerMin!=null) emBS = bsExpectedMoveUSD(S, sigmaDollarPerMin, minutesLeft);
-    if(atrPerMin!=null)         emATR= atrMoveUSD(atrPerMin, minutesLeft);
-    emCombined=combineRMS(emBS, emATR);
+}
+
+/* ========== التحديثات الدورية ========== */
+async function tickTime(){
+  const { startMsUTC, secsLeft } = getETWindow();
+  secondsLeft = secsLeft;
+
+  // إذا تغيّرت الساعة، حدّث PTB
+  if(currHourStartUTCms !== startMsUTC){
+    currHourStartUTCms = startMsUTC;
+    PTB = await fetchHourOpen(startMsUTC);
   }
+
+  recomputeEM();
   render();
 }
-async function watchMinute(){
-  const nowMin=Math.floor(Date.now()/60000);
-  if(lastVolMinute===nowMin) return;
-  lastVolMinute=nowMin;
 
-  const k=await fetch1mKlines(Math.max(VOL_WINDOW_MINS+1, ATR_LEN+1));
+async function tickVol(){
+  const now = Date.now();
+  if(now - lastVolRefreshAt < VOL_REFRESH_MS) return;
+  lastVolRefreshAt = now;
+
+  const k = await fetch1mKlines(Math.max(LOOKBACK_MIN+1, 61));
   if(k){
-    const closes=k.map(x=>+x[4]);
-    const volDol=dollarVolPerMinFromCloses(closes);
-    if(volDol!=null) sigmaDollarPerMin=volDol;
-
-    const atr=computeATR1m(k, ATR_LEN);
-    if(atr!=null) atrPerMin=atr;
-
-    if(S!=null){
-      emBS = sigmaDollarPerMin? bsExpectedMoveUSD(S, sigmaDollarPerMin, minutesLeft):null;
-      emATR= atrPerMin?         atrMoveUSD(atrPerMin, minutesLeft):null;
-      emCombined=combineRMS(emBS, emATR);
-    }
+    const closes = k.map(x=>+x[4]);
+    const vol = dollarVolPerMinFromCloses(closes);
+    if(vol!=null) sigmaDollarPerMin = vol;
   }
+  recomputeEM();
   render();
 }
 
-/* ===== UI ===== */
+/* ========== واجهة المستخدم ========== */
 function render(){
-  const btcEl=document.getElementById('btc');
-  const ptbEl=document.getElementById('ptb');
-  const minsEl=document.getElementById('mins');
-  const gapEl=document.getElementById('gap');
-  const emCombEl=document.getElementById('emComb');
-  const reachEl=document.getElementById('reach');
-  const upEl=document.getElementById('upPct');
-  const dnEl=document.getElementById('downPct');
-  const scoreEl=document.getElementById('scoreSigned');
+  const btcEl = document.getElementById('btc');
+  const ptbEl = document.getElementById('ptb');
+  const minsEl= document.getElementById('mins');
+  const gapEl = document.getElementById('gap');
+  const emEl  = document.getElementById('em');
+  const upEl  = document.getElementById('upPct');
+  const dnEl  = document.getElementById('downPct');
 
-  btcEl.textContent=fmt(S,2);
-  ptbEl.textContent=fmt(PTB,2);
-  minsEl.textContent=minutesLeft;
+  btcEl.textContent = fmt(S,2);
+  ptbEl.textContent = fmt(PTB,2);
+  minsEl.textContent= toMMSS(secondsLeft);
 
-  // Gap لونياً: أخضر إذا السعر فوق PTB
+  // Gap ملوّن
   if(S!=null && PTB!=null){
-    const gap=S-PTB;
-    gapEl.textContent=`${gap>0?'+':''}${fmt(gap,2)}`;
-    gapEl.className=`val ${gap>0?'green':'red'}`;
-    btcEl.className=`val ${S>PTB?'green':'red'}`;
+    const gap = S - PTB;
+    gapEl.textContent = `${gap>0?'+':''}${fmt(gap,2)}`;
+    gapEl.className = `val ${gap>0?'green':'red'}`;
+    btcEl.className = `val ${gap>0?'green':'red'}`;
   }else{
-    gapEl.textContent='—'; gapEl.className='val'; btcEl.className='val';
+    gapEl.textContent = '—'; gapEl.className='val'; btcEl.className='val';
   }
 
-  emCombEl.textContent = emCombined!=null ? fmt(emCombined,2) : '—';
+  emEl.textContent = emBS!=null ? fmt(emBS,2) : '—';
 
-  // احتمالات + Signed Score باستخدام EM_combined
-  if(S!=null && PTB!=null && emCombined!=null && emCombined>0){
-    const z=(PTB - S)/emCombined;
-    const p=1 - normCdf(z);            // احتمال الإغلاق ≥ PTB
-    const up=p, down=1-p;
-
-    // Reach كفرق عن 50% (+/-) وملوّن
-    let reachDiff=(p*100)-50;
-    const sign=reachDiff>0?'+':(reachDiff<0?'−':'');
-    reachEl.textContent=`${sign}${Math.abs(reachDiff).toFixed(1)}% (z = ${z.toFixed(2)})`;
-    reachEl.className=`val ${reachDiff>0?'green':(reachDiff<0?'red':'')}`;
-
-    // Up/Down (مع سناب للتعادل)
-    let upPct=up*100, downPct=down*100;
-    if (Math.abs(upPct-50)<0.5){ upPct=50; downPct=50; }
-    upEl.textContent=upPct.toFixed(1)+'%';
-    dnEl.textContent=downPct.toFixed(1)+'%';
-    if(upPct>downPct){ upEl.className='val green'; dnEl.className='val'; }
-    else if(downPct>upPct){ dnEl.className='val red'; upEl.className='val'; }
-    else { upEl.className='val'; dnEl.className='val'; }
-
-    // Signed Score −100..+100
-    const scoreSigned = (p - 0.5) * 200;
-    scoreEl.textContent = scoreSigned.toFixed(1);
-    scoreEl.className = `val ${scoreSigned>0?'green':(scoreSigned<0?'red':'')}`;
+  // Up / Down
+  if(S!=null && PTB!=null){
+    // إذا EM قريب من الصفر (آخر الثواني)، حدّد الاحتمال مباشرة من موقع السعر
+    if(emBS==null || emBS < EPS){
+      const up = S >= PTB ? 100 : 0;
+      const dn = 100 - up;
+      upEl.textContent = up.toFixed(1)+'%';
+      dnEl.textContent = dn.toFixed(1)+'%';
+      upEl.className = up>dn ? 'val green':'val';
+      dnEl.className = dn>up ? 'val red':'val';
+    }else{
+      const z = (PTB - S)/emBS;
+      const p = 1 - normCdf(z); // احتمال الإغلاق ≥ PTB
+      const upPct = p*100, downPct = (1-p)*100;
+      upEl.textContent = upPct.toFixed(1)+'%';
+      dnEl.textContent = downPct.toFixed(1)+'%';
+      upEl.className = upPct>downPct ? 'val green' : 'val';
+      dnEl.className = downPct>upPct ? 'val red'   : 'val';
+    }
   }else{
-    reachEl.textContent='—'; reachEl.className='val';
     upEl.textContent='—'; dnEl.textContent='—'; upEl.className='val'; dnEl.className='val';
-    scoreEl.textContent='—'; scoreEl.className='val';
   }
 
-  document.getElementById('stamp').textContent=
-    'Last update: '+new Date().toISOString().replace('T',' ').slice(0,19)+' UTC';
+  document.getElementById('stamp').textContent =
+    'Last update: ' + new Date().toISOString().replace('T',' ').slice(0,19) + ' UTC';
 }
 
-/* ===== boot ===== */
+/* ========== تشغيل ========== */
 (async function(){
-  const {startMsUTC, minsLeft}=getHourWindowET();
-  currHourStartUTCms=startMsUTC; minutesLeft=minsLeft;
-  PTB=await fetchHourOpen(startMsUTC);
-  await watchMinute();    // يحسب BS/ATR أوليًا + الدمج
+  const { startMsUTC, secsLeft } = getETWindow();
+  currHourStartUTCms = startMsUTC;
+  secondsLeft = secsLeft;
+
+  PTB = await fetchHourOpen(startMsUTC);
+  await tickVol();      // احسب التذبذب أول مرة
   startWS();
-  setInterval(everySecond,1000);
-  setInterval(watchMinute,5000);
+
+  setInterval(tickTime, SEC_UPDATE_MS);   // تحديث الوقت/EM بالثواني
+  setInterval(tickVol, 1500);             // تحدّث التذبذب باستمرار
   render();
 })();
 </script>
