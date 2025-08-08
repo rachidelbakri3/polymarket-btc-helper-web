@@ -1,139 +1,72 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-<title>Polymarket BTC Helper (Web)</title>
-<script src="https://cdn.jsdelivr.net/npm/luxon@3/build/global/luxon.min.js"></script>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>BTC Up/Down Helper – Live</title>
 <style>
-  :root{--bg:#0f172a;--card:#111827;--text:#e5e7eb;--muted:#9ca3af;}
-  body{font-family:system-ui,Arial; background:var(--bg); color:var(--text); margin:0; padding:24px;}
-  h1{font-size:22px;text-align:center;margin:0 0 14px}
+  :root{--bg:#0f172a;--card:#111827;--text:#e5e7eb;--muted:#9ca3af;--pill:#0b1020;}
+  body{font-family:system-ui,Arial; background:var(--bg); color:var(--text); margin:0; padding:22px}
+  h1{margin:0 0 14px; text-align:center}
   .wrap{max-width:520px;margin:0 auto}
-  .card{background:var(--card);border-radius:14px;padding:16px}
-  label{display:block;font-size:13px;color:var(--muted);margin:10px 0 6px}
-  input,button{width:100%;padding:12px;border-radius:10px;border:1px solid #374151;background:#0b1020;color:var(--text)}
-  button{border:0;background:#2563eb;font-weight:700;margin-top:12px;cursor:pointer}
+  .card{background:var(--card);border-radius:14px;padding:16px;box-shadow:0 4px 20px rgba(0,0,0,.25)}
   .row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
-  .kpi{display:grid;grid-template-columns:1fr auto;gap:6px;padding:10px;border-radius:10px;background:#0b1020;margin-top:10px}
-  .kpi b{font-size:16px}
-  .foot{margin-top:10px;font-size:12px;color:var(--muted);text-align:center}
+  .kpi{display:grid;grid-template-columns:1fr auto;gap:6px;background:var(--pill);padding:10px;border-radius:10px;margin-top:10px}
+  label{display:block;color:var(--muted);font-size:13px;margin:10px 0 6px}
+  input,button{width:100%;padding:12px;border-radius:12px;border:1px solid #374151;background:#0b1020;color:var(--text)}
+  button{border:0;background:#2563eb;font-weight:700;cursor:pointer;margin-top:12px}
+  .foot{margin-top:10px;color:var(--muted);font-size:12px;text-align:center}
 </style>
 </head>
 <body>
 <div class="wrap">
-  <h1>BTC Up/Down Helper</h1>
+  <h1>BTC Up/Down Helper (Live)</h1>
   <div class="card">
     <div class="row">
-      <div class="kpi"><span>BTC (USDT)</span><b id="btcPrice">—</b></div>
-      <div class="kpi"><span>Minutes Left (ET)</span><b id="minsLeft">—</b></div>
+      <div class="kpi"><span>BTC (USDT)</span><b id="btc">—</b></div>
+      <div class="kpi"><span>Minutes Left (UTC)</span><b id="mins">—</b></div>
     </div>
 
-    <div class="kpi"><span>Price to Beat (1h open)</span><b id="ptb">—</b></div>
-    <div class="kpi"><span>Volatility / min</span><b id="volMin">—</b></div>
-    <div class="kpi"><span>Expected Move</span><b id="expMove">—</b></div>
+    <div class="kpi"><span>Price to Beat (1h open, UTC)</span><b id="ptb">—</b></div>
+    <div class="kpi"><span>Volatility / min (last <span id="winLbl">15</span>m)</span><b id="vol">—</b></div>
+    <div class="kpi"><span>Expected Move</span><b id="exp">—</b></div>
 
     <label>Current Up Price (from Polymarket)</label>
-    <input id="upPrice" type="number" step="0.01" placeholder="e.g. 0.62 (62¢)" />
-    <button id="calcBtn">Calculate</button>
+    <input id="up" type="number" step="0.01" placeholder="e.g. 0.62 (62¢)"/>
+    <button id="recalc">Calculate</button>
 
     <div class="row">
       <div class="kpi"><span>Up %</span><b id="upPct">—</b></div>
-      <div class="kpi"><span>Down %</span><b id="downPct">—</b></div>
+      <div class="kpi"><span>Down %</span><b id="dnPct">—</b></div>
     </div>
-    <div class="kpi"><span>Signal</span><b id="signal">—</b></div>
+    <div class="kpi"><span>Signal</span><b id="sig">—</b></div>
 
     <div class="foot" id="stamp">—</div>
-    <div class="foot">Data: Binance (public). Times computed in America/New_York (ET).</div>
   </div>
 </div>
 
 <script>
-const { DateTime } = luxon;
-const fmt = (n,d=2)=>Number.isFinite(n)?n.toFixed(d):"—";
+const fmt=(n,d=2)=>Number.isFinite(n)?n.toFixed(d):"—";
 
-function getHourWindowET(){
-  const nowET   = DateTime.now().setZone('America/New_York');
-  const startET = nowET.startOf('hour');
-  const endET   = startET.plus({hours:1});
-  const startMsUTC = startET.toUTC().toMillis();
-  const minsLeft = Math.max(0, Math.floor(endET.diff(nowET,'minutes').minutes));
-  return {startMsUTC, minsLeft};
+// نافذة الساعة الحالية UTC (لباينانس)
+function hourWindowUTC(){
+  const now = new Date();
+  const start = new Date(Date.UTC(now.getUTCFullYear(),now.getUTCMonth(),now.getUTCDate(),now.getUTCHours(),0,0));
+  const end   = new Date(start.getTime()+3600*1000);
+  const minsLeft = Math.max(0, Math.floor((end-now)/60000));
+  return {startMs:start.getTime(), end, minsLeft};
 }
 
-async function fetchBTC(){
-  const r = await fetch('https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT');
-  const j = await r.json();
-  return parseFloat(j.price);
-}
-
-// 👇 التعديل المهم: نمرّر startTime فقط و limit=1
+// افتتاح شمعة 1h الحالية من Binance
 async function fetchHourOpen(startMs){
-  const url = `https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1h&startTime=${startMs}&limit=1`;
-  const r = await fetch(url);
-  const j = await r.json();
-  return (Array.isArray(j) && j.length) ? parseFloat(j[0][1]) : null; // open
+  const url=`https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1h&startTime=${startMs}&limit=1`;
+  const r=await fetch(url,{cache:'no-store'}); const j=await r.json();
+  return (Array.isArray(j)&&j.length)?parseFloat(j[0][1]):null;
 }
 
-async function fetchVolPerMin(lookbackMins){
-  const n = Math.max(1, Math.min(1000, lookbackMins||15));
-  const url = `https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1m&limit=${n}`;
-  const r = await fetch(url);
-  const d = await r.json();
-  if(!Array.isArray(d)||!d.length) return 5;
-  const highs = d.map(c=>+c[2]), lows = d.map(c=>+c[3]);
-  return (Math.max(...highs)-Math.min(...lows))/Math.max(1,(lookbackMins||15));
-}
+// WebSocket للسعر الحي
+let ws, lastPrice=NaN, ptb=NaN, minsLeft=0;
+const windowMinutes = 15; // غيّرها إذا تريد
+document.getElementById('winLbl').textContent = windowMinutes;
 
-function computeFair(current, ptb, minsLeft, volMin, upMarket){
-  const expectedMove = volMin * Math.max(1, minsLeft||1);
-  const gapImpact = expectedMove ? (ptb - current)/expectedMove : 0;
-  let fairUp = Math.max(0, Math.min(1, 0.5 + gapImpact/100));
-  const fairDown = 1 - fairUp;
-  const fairUpPct = +(fairUp*100).toFixed(1);
-  const fairDownPct = +(fairDown*100).toFixed(1);
-  const m = isNaN(upMarket) ? 0.5 : upMarket;
-  const diff = fairUp - m;
-  let signal = "⚪ Neutral";
-  if (diff > 0.15) signal = "🟢 Buy Up";
-  else if (diff < -0.15) signal = "🔴 Sell Up";
-  return {expectedMove, fairUpPct, fairDownPct, signal};
-}
-
-async function refresh(){
-  try{
-    const {startMsUTC, minsLeft} = getHourWindowET();
-    const [price, ptb, volMin] = await Promise.all([
-      fetchBTC(),
-      fetchHourOpen(startMsUTC),
-      fetchVolPerMin(minsLeft || 15)
-    ]);
-
-    document.getElementById('btcPrice').textContent = fmt(price,2);
-    document.getElementById('ptb').textContent = ptb?fmt(ptb,2):'—';
-    document.getElementById('minsLeft').textContent = minsLeft;
-    document.getElementById('volMin').textContent = fmt(volMin,3);
-
-    const upM = parseFloat(document.getElementById('upPrice').value);
-    const {expectedMove, fairUpPct, fairDownPct, signal} =
-      computeFair(price, ptb ?? price, minsLeft, volMin, upM);
-
-    document.getElementById('expMove').textContent = fmt(expectedMove,3);
-    document.getElementById('upPct').textContent = fairUpPct + '%';
-    document.getElementById('downPct').textContent = fairDownPct + '%';
-    document.getElementById('signal').textContent = signal;
-
-    const t = new Date().toISOString().replace('T',' ').slice(0,19);
-    document.getElementById('stamp').textContent = `Last update: ${t} UTC | Open = Binance 1h @ ET hour start`;
-  }catch(e){
-    document.getElementById('stamp').textContent = 'Error fetching data';
-    console.error(e);
-  }
-}
-
-document.getElementById('calcBtn').addEventListener('click', refresh);
-refresh();
-setInterval(refresh, 30000);
-</script>
-</body>
-</html>
+// نخزن الأسعار
