@@ -3,12 +3,13 @@
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>BTC Up/Down — Black-Scholes Expected Move</title>
+<title>BTC Up/Down — Black-Scholes (Smart)</title>
 <style>
   :root{--bg:#0f172a;--card:#111827;--panel:#0b1020;--text:#e5e7eb;--muted:#9ca3af;--btn:#2563eb;}
+  *{box-sizing:border-box}
   body{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,Arial}
-  .wrap{max-width:640px;margin:0 auto;padding:24px}
-  h1{margin:0 0 16px;text-align:center}
+  .wrap{max-width:680px;margin:0 auto;padding:22px}
+  h1{margin:0 0 14px;text-align:center}
   .card{background:var(--card);border-radius:14px;padding:16px;box-shadow:0 6px 24px rgba(0,0,0,.25)}
   .grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
   .kpi{display:grid;grid-template-columns:1fr auto;gap:6px;background:var(--panel);border-radius:12px;padding:12px;margin-top:10px}
@@ -21,7 +22,7 @@
 </head>
 <body>
 <div class="wrap">
-  <h1>BTC Up/Down (Black-Scholes)</h1>
+  <h1>BTC Up/Down — Black-Scholes (Smart)</h1>
   <div class="card">
 
     <div class="grid">
@@ -32,11 +33,19 @@
     <div class="kpi"><span>Price to Beat (1h open, UTC)</span><b id="ptb">—</b></div>
 
     <div class="grid">
-      <div class="kpi"><span>Volatility $/min (last N mins)</span><b id="volDol">—</b></div>
-      <div class="kpi"><span>σ annualized (Black-Scholes)</span><b id="sigmaAnn">—</b></div>
+      <div class="kpi"><span>Gap to Beat ($)</span><b id="gapUsd">—</b></div>
+      <div class="kpi"><span>Minutes to Beat (est.)</span><b id="minsToBeat">—</b></div>
     </div>
 
-    <div class="kpi"><span>Expected Move (Black-Scholes)</span><b id="em">—</b></div>
+    <div class="grid">
+      <div class="kpi"><span>Volatility $/min (window)</span><b id="volDol">—</b></div>
+      <div class="kpi"><span>σ annualized</span><b id="sigmaAnn">—</b></div>
+    </div>
+
+    <div class="grid">
+      <div class="kpi"><span>Expected Move ($)</span><b id="emUSD">—</b></div>
+      <div class="kpi"><span>Expected Move (%)</span><b id="emPct">—</b></div>
+    </div>
 
     <label>Current Up Price (Polymarket) — اختياري</label>
     <input id="upPrice" type="number" step="0.01" placeholder="e.g. 0.62 (62¢)">
@@ -49,165 +58,194 @@
     <div class="kpi"><span>Signal</span><b id="signal">—</b></div>
 
     <div class="foot" id="stamp">Initializing…</div>
-    <div class="foot">Live: Binance WebSocket · 1m/1h data: Binance REST · Time basis: UTC</div>
+    <div class="foot">Live: Binance WebSocket · Klines 1m/1h: Binance REST · Time: UTC</div>
   </div>
 </div>
 
 <script>
-/* ========= Config ========= */
-const MINUTES_PER_YEAR = 525600;      // 365*24*60
-const VOL_WINDOW_MINS  = 60;          // نافذة حساب $/min (يمكنك تغييرها)
-const MIN_EM_PCT_FLOOR = 0.05;        // أدنى حركة متوقعة كنسبة % لمنع الصفر
+/* ===== CONFIG ===== */
+const MINUTES_PER_YEAR = 525600;
+const VOL_WINDOW_MINS  = 60;
+const MIN_EM_PCT_FLOOR = 0.05;
+const NEUTRAL_BAND     = 0.15;
+const LOGISTIC_BASE_K  = 0.85;
+const MAX_TAPE_MIN     = 30;
 
-/* ========= State ========= */
-let lastPrice = null;                 // S
-let ptb = null;                       // Price to Beat (1h open)
-let minutesLeft = 0;                  // للساعة الجارية (UTC)
-let sigmaDollarPerMin = null;         // انحراف معياري بدولار/دقيقة
-let sigmaAnnual = null;               // Black-Scholes annualized σ (كنسبة)
-let expectedMoveUSD = null;           // S * σ * sqrt(T)
-let secTape = [];                     // {tSec, p} لتنعيم السعر بالثواني
+/* ===== STATE ===== */
+let S = null, PTB = null, minutesLeft = 0;
+let sigmaDollarPerMin = null, sigmaAnnual = null;
+let expectedMoveUSD = null, expectedMovePct = null;
 let currentHourStart = null;
+let secTape = [];
+let lastVolMinute = null;
 
-/* ========= Helpers ========= */
-const fmt = (n,d=2)=>Number.isFinite(n)?n.toFixed(d):"—";
+/* ===== HELPERS ===== */
+const fmt=(n,d=2)=>Number.isFinite(n)?n.toFixed(d):"—";
+const clamp=(x,a,b)=>Math.min(b,Math.max(a,x));
 function hourWindowUTC(date=new Date()){
-  const start = new Date(Date.UTC(date.getUTCFullYear(),date.getUTCMonth(),date.getUTCDate(),date.getUTCHours(),0,0));
-  const end   = new Date(start.getTime()+3600_000);
-  return {start, end, minutesLeft: Math.max(0, Math.floor((end - date)/60000))};
+  const start=new Date(Date.UTC(date.getUTCFullYear(),date.getUTCMonth(),date.getUTCDate(),date.getUTCHours(),0,0));
+  const end=new Date(start.getTime()+3600_000);
+  return {start,end,minutesLeft:Math.max(0,Math.floor((end-date)/60000))};
 }
 async function fetchHourOpenUTC(startMs){
-  const url = `https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1h&startTime=${startMs}&limit=1`;
-  const r = await fetch(url,{cache:'no-store'}); const j = await r.json();
-  return (Array.isArray(j)&&j.length)?parseFloat(j[0][1]):null;
+  try{
+    const url=`https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1h&startTime=${startMs}&limit=1`;
+    const r=await fetch(url,{cache:'no-store'}); const j=await r.json();
+    return (Array.isArray(j)&&j.length)?parseFloat(j[0][1]):null;
+  }catch{return null;}
 }
 async function fetch1mCloses(limit=VOL_WINDOW_MINS+1){
-  const url = `https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1m&limit=${limit}`;
-  const r = await fetch(url,{cache:'no-store'}); const data = await r.json();
-  if (!Array.isArray(data) || data.length<2) return null;
-  return data.map(k=>+k[4]); // close
+  try{
+    const url=`https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1m&limit=${limit}`;
+    const r=await fetch(url,{cache:'no-store'}); const data=await r.json();
+    if(!Array.isArray(data)||data.length<2) return null;
+    return data.map(k=>+k[4]);
+  }catch{return null;}
 }
 
-/* ========= Volatility $/min =========
-   stddev of consecutive 1m price changes (close-to-close) over last N minutes
-===================================== */
+/* ===== VOL $/min ===== */
+function welfordStd(arr){
+  let n=0,mean=0,M2=0; for(const x of arr){ n++; const d=x-mean; mean+=d/n; M2+=d*(x-mean); }
+  return n>1?Math.sqrt(M2/(n)):null;
+}
 function computeDollarVolPerMin(closes){
-  const diffs = [];
-  for(let i=1;i<closes.length;i++) diffs.push(closes[i]-closes[i-1]);
-  if (diffs.length<2) return null;
-  const mean = diffs.reduce((a,b)=>a+b,0)/diffs.length;
-  const varp = diffs.reduce((s,x)=>s+(x-mean)*(x-mean),0)/diffs.length; // population
-  return Math.sqrt(varp); // $/min
+  const diffs=[]; for(let i=1;i<closes.length;i++) diffs.push(closes[i]-closes[i-1]);
+  const std=welfordStd(diffs); return std??null;
+}
+function mergeCurrentMinute(closes){
+  if(!secTape.length||!closes||!closes.length) return closes;
+  const clone=closes.slice(); clone[clone.length-1]=secTape[secTape.length-1].p; return clone;
 }
 
-/* ========= Black-Scholes Expected Move =========
-   σ_annual = (σ_$perMin / S) * sqrt(minutes/year)
-   T(years) = minutesLeft / minutes/year
-   EM($)    = S * σ_annual * sqrt(T)
-   (يعني رياضيًا يساوي σ_$perMin * sqrt(minutesLeft) لكن نحسبها بصيغة BS)
-=============================================== */
+/* ===== BLACK-SCHOLES ===== */
 function computeBS_ExpectedMove(S, sigmaDolPerMin, minsLeft){
-  if(!(S>0) || !(sigmaDolPerMin>0) || !(minsLeft>=0)) return {sigmaAnn:null, em:null};
-  const sigmaAnn = (sigmaDolPerMin / S) * Math.sqrt(MINUTES_PER_YEAR); // نسبة سنوية
-  const T = minsLeft / MINUTES_PER_YEAR;                                // سنوات
-  const em = S * sigmaAnn * Math.sqrt(T);                               // $
-  return {sigmaAnn, em};
+  if(!(S>0)&&!(sigmaDolPerMin>0)) return {sigmaAnn:null, emUSD:null, emPct:null};
+  const sigmaAnn=(sigmaDolPerMin/S)*Math.sqrt(MINUTES_PER_YEAR);
+  const T=minsLeft/MINUTES_PER_YEAR;
+  const emUSD=S*sigmaAnn*Math.sqrt(T);
+  const emPct=(emUSD/S)*100;
+  return {sigmaAnn, emUSD, emPct};
 }
 
-/* ========= Probabilities (logistic) ========= */
+/* ===== PROBS ===== */
+function dynamicLogisticK(volPct, mins){
+  const tAdj = mins<=5?0.65:mins<=10?0.75:0.85;
+  const vAdj = volPct<0.1?0.7:volPct<0.2?0.8:0.9;
+  return LOGISTIC_BASE_K*tAdj*vAdj;
+}
 function computeProbsAndSignal(upMarket){
-  const S = lastPrice ?? 0;
-  const gap = (ptb ?? S) - S;
-  // أرضية للحركة المتوقعة كنسبة من السعر
-  const emPct = Math.max(MIN_EM_PCT_FLOOR, (expectedMoveUSD ?? 0)/Math.max(1,S)*100);
-  const scale = Math.max(1e-9, (emPct/100)*S); // مقياس بالدولار
-  const k = 0.85; // حساسية
-  const x = gap / (k * scale);
-  const up = 1/(1+Math.exp(-x));
-  const down = 1-up;
-  const m = isNaN(upMarket)?0.5:+upMarket;
-  const sig = up - m > 0.15 ? "🟢 Buy Up" : (up - m < -0.15 ? "🔴 Sell Up" : "⚪ Neutral");
+  const price=S??0, gap=(PTB??price)-price;
+  const emPctFloor=Math.max(MIN_EM_PCT_FLOOR, expectedMovePct??0);
+  const scaleDollar=(emPctFloor/100)*Math.max(1,price);
+  const k=dynamicLogisticK(emPctFloor, minutesLeft);
+  const x=gap/(k*Math.max(1e-9,scaleDollar));
+  let up=1/(1+Math.exp(-x)); up=clamp(up,0.01,0.99);
+  const down=1-up, market=isNaN(upMarket)?0.5:+upMarket, edge=up-market;
+  const sig=edge>NEUTRAL_BAND?"🟢 Buy Up":edge<-NEUTRAL_BAND?"🔴 Sell Up":"⚪ Neutral";
   return {upPct:+(up*100).toFixed(1), downPct:+(down*100).toFixed(1), sig};
 }
 
-/* ========= Rendering ========= */
+/* ===== NEW: Gap & Minutes to Beat ===== */
+function computeGapAndMinsToBeat(){
+  const gap = (PTB!=null && S!=null) ? (PTB - S) : null;  // $ (قد يكون موجب/سالب)
+  let minsToBeat = null;
+  if (gap!=null){
+    if (Math.abs(gap) < 1e-9) minsToBeat = 0;
+    else if (sigmaDollarPerMin!=null && sigmaDollarPerMin>0){
+      minsToBeat = Math.abs(gap) / sigmaDollarPerMin;
+    }
+  }
+  return {gap, minsToBeat};
+}
+
+/* ===== RENDER ===== */
 function render(){
-  document.getElementById('btc').textContent      = fmt(lastPrice,2);
-  document.getElementById('mins').textContent     = minutesLeft;
-  document.getElementById('ptb').textContent      = fmt(ptb,2);
+  document.getElementById('btc').textContent  = fmt(S,2);
+  document.getElementById('mins').textContent = minutesLeft;
+  document.getElementById('ptb').textContent  = fmt(PTB,2);
+
+  // عرض Gap و Minutes to Beat
+  const {gap, minsToBeat} = computeGapAndMinsToBeat();
+  document.getElementById('gapUsd').textContent   = gap!=null ? (gap>=0?'+':'')+fmt(gap,2) : '—';
+  document.getElementById('minsToBeat').textContent =
+    (minsToBeat==null ? (sigmaDollarPerMin? '—':'∞') : fmt(minsToBeat,1));
+
   document.getElementById('volDol').textContent   = sigmaDollarPerMin!=null ? fmt(sigmaDollarPerMin,2) : '—';
   document.getElementById('sigmaAnn').textContent = sigmaAnnual!=null ? (sigmaAnnual*100).toFixed(2)+'%' : '—';
-  document.getElementById('em').textContent       = expectedMoveUSD!=null ? fmt(expectedMoveUSD,2) : '—';
+  document.getElementById('emUSD').textContent    = expectedMoveUSD!=null ? fmt(expectedMoveUSD,2) : '—';
+  document.getElementById('emPct').textContent    = expectedMovePct!=null ? fmt(expectedMovePct,2)+'%' : '—';
 
-  const upM = parseFloat(document.getElementById('upPrice').value);
-  const {upPct,downPct,sig} = computeProbsAndSignal(upM);
-  document.getElementById('upPct').textContent = Number.isFinite(upPct)? upPct+'%':'—';
+  const upM=parseFloat(document.getElementById('upPrice').value);
+  const {upPct,downPct,sig}=computeProbsAndSignal(upM);
+  document.getElementById('upPct').textContent   = Number.isFinite(upPct)? upPct+'%':'—';
   document.getElementById('downPct').textContent = Number.isFinite(downPct)? downPct+'%':'—';
-  document.getElementById('signal').textContent = sig;
+  document.getElementById('signal').textContent  = sig;
 
   document.getElementById('stamp').textContent =
-    'Last update: ' + new Date().toISOString().replace('T',' ').slice(0,19) + ' UTC';
+    'Last update: '+new Date().toISOString().replace('T',' ').slice(0,19)+' UTC';
 }
 
-/* ========= Hour maintenance (PTB + minutesLeft) ========= */
+/* ===== HOURLY & VOL REFRESH ===== */
 async function refreshHourStuff(){
-  const {start, minutesLeft:ml} = hourWindowUTC();
-  minutesLeft = ml;
-  if (currentHourStart !== start.getTime()){
-    currentHourStart = start.getTime();
-    ptb = await fetchHourOpenUTC(currentHourStart);
+  const {start,minutesLeft:ml}=hourWindowUTC();
+  minutesLeft=ml;
+  if(currentHourStart!==start.getTime()){
+    currentHourStart=start.getTime();
+    PTB=await fetchHourOpenUTC(currentHourStart);
   }
 }
-
-/* ========= Refresh 1m volatility each minute ========= */
-let lastVolMinute = null;
+let lastCloses=null;
 async function refreshVolIfNewMinute(){
-  const nowMin = Math.floor(Date.now()/60000);
-  if (nowMin !== lastVolMinute){
-    lastVolMinute = nowMin;
-    const closes = await fetch1mCloses(VOL_WINDOW_MINS+1);
-    const volDol = closes ? computeDollarVolPerMin(closes) : null;
-    sigmaDollarPerMin = volDol;
+  const nowMin=Math.floor(Date.now()/60000);
+  if(nowMin!==lastVolMinute){
+    lastVolMinute=nowMin;
+    const closes=await fetch1mCloses(VOL_WINDOW_MINS+1);
+    lastCloses=closes;
+  }
+  const merged=lastCloses?mergeCurrentMinute(lastCloses):null;
+  const volDol=merged?computeDollarVolPerMin(merged):null;
+  if(volDol!=null) sigmaDollarPerMin=volDol;
 
-    // بعد تحديث $/min، احسب σ السنوية و EM بمعادلة Black-Scholes
-    if (lastPrice!=null && sigmaDollarPerMin!=null){
-      const {sigmaAnn, em} = computeBS_ExpectedMove(lastPrice, sigmaDollarPerMin, minutesLeft);
-      sigmaAnnual = sigmaAnn;
-      expectedMoveUSD = em;
-    }
+  if(S!=null && sigmaDollarPerMin!=null){
+    const {sigmaAnn, emUSD, emPct}=computeBS_ExpectedMove(S, sigmaDollarPerMin, minutesLeft);
+    sigmaAnnual=sigmaAnn; expectedMoveUSD=emUSD; expectedMovePct=emPct;
   }
 }
 
-/* ========= WebSocket live price (per second tape) ========= */
+/* ===== WS (second-level smoothing) ===== */
 function startWS(){
-  const ws = new WebSocket("wss://stream.binance.com:9443/ws/btcusdt@trade");
-  ws.onmessage = (ev)=>{
-    const {p,T} = JSON.parse(ev.data);
-    const price = parseFloat(p);
-    const tSec  = Math.floor((T||Date.now())/1000);
-    lastPrice = price;
-    if (secTape.length && secTape[secTape.length-1].tSec===tSec) secTape[secTape.length-1].p=price;
-    else secTape.push({tSec,p:price});
-    // حدّث EM فورًا باستخدام σ_$/min الأحدث
-    if (sigmaDollarPerMin!=null){
-      const res = computeBS_ExpectedMove(lastPrice, sigmaDollarPerMin, minutesLeft);
-      sigmaAnnual = res.sigmaAnn; expectedMoveUSD = res.em;
-    }
-    render();
+  const ws=new WebSocket("wss://stream.binance.com:9443/ws/btcusdt@trade");
+  ws.onmessage=(ev)=>{
+    try{
+      const {p,T}=JSON.parse(ev.data);
+      const price=parseFloat(p); const tSec=Math.floor((T||Date.now())/1000);
+      S=price;
+      if(secTape.length && secTape[secTape.length-1].tSec===tSec) secTape[secTape.length-1].p=price;
+      else{
+        secTape.push({tSec,p:price});
+        const cutoff=Math.floor(Date.now()/1000)-MAX_TAPE_MIN*60;
+        while(secTape.length && secTape[0].tSec<cutoff) secTape.shift();
+      }
+      // تحديث EM فوراً
+      if(sigmaDollarPerMin!=null){
+        const res=computeBS_ExpectedMove(S, sigmaDollarPerMin, minutesLeft);
+        sigmaAnnual=res.sigmaAnn; expectedMoveUSD=res.emUSD; expectedMovePct=res.emPct;
+      }
+      render();
+    }catch{}
   };
-  ws.onclose = ()=> setTimeout(startWS, 1500);
+  ws.onclose=()=>setTimeout(startWS,1500);
 }
 
-/* ========= Boot ========= */
+/* ===== BOOT ===== */
 document.getElementById('calc').addEventListener('click', render);
 
 (async function boot(){
   await refreshHourStuff();
-  await refreshVolIfNewMinute();  // حساب أولي للـ $/min والـ EM
+  await refreshVolIfNewMinute();
   startWS();
   render();
 
-  // كل ثانية: حدّث الوقت المتبقي، وعند دخول دقيقة جديدة يعاد حساب $/min تلقائيًا
   setInterval(async ()=>{
     await refreshHourStuff();
     await refreshVolIfNewMinute();
