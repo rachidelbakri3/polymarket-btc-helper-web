@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>BTC Up/Down — Minimal (Prob)</title>
+<title>BTC Up/Down — Minimal (Prob + z-score)</title>
 <script src="https://cdn.jsdelivr.net/npm/luxon@3/build/global/luxon.min.js"></script>
 <style>
   :root{--bg:#0f172a;--card:#111827;--panel:#0b1020;--text:#e5e7eb;--muted:#9ca3af;--green:#22c55e;--red:#ef4444;}
@@ -32,7 +32,7 @@
   <div class="row"><span class="label">Down %</span><span class="val" id="downPct">—</span></div>
 
   <div class="foot" id="stamp">Initializing…</div>
-  <div class="foot">Live: Binance WebSocket · Klines 1m/1h: Binance REST · Times: America/New_York (ET)</div>
+  <div class="foot">Live: Binance WebSocket · Times: America/New_York (ET)</div>
 </div>
 
 <script>
@@ -89,7 +89,7 @@ function bsExpectedMoveUSD(S, sigmaDolPerMin, minsLeft){
   return S * sigmaAnn * Math.sqrt(T);
 }
 
-/* ---------- Normal CDF (probability) ---------- */
+/* ---------- Normal CDF ---------- */
 function normCdf(z){
   const t=1/(1+0.2316419*Math.abs(z));
   const d=0.3989423*Math.exp(-0.5*z*z);
@@ -152,35 +152,35 @@ function render(){
   emEl.textContent  = (emUSD!=null)? fmt(emUSD,2) : '—';
   minsEl.textContent= minutesLeft;
 
-  // Gap: price - ptb  (أخضر + إذا السعر فوق، أحمر − إذا تحت)
-  let gap=null;
   if(S!=null && PTB!=null){
-    gap = S - PTB;
+    const gap = S - PTB; // أخضر إذا السعر فوق PTB
     gapEl.textContent = `${gap>0?'+':''}${fmt(gap,2)}`;
     gapEl.className   = `val ${gap>0?'green':'red'}`;
-    // لون السعر أيضًا مقابل PTB
     btcEl.className   = `val ${S>PTB?'green':'red'}`;
-  }else{
-    gapEl.textContent='—'; gapEl.className='val';
-    btcEl.className='val';
+  } else {
+    gapEl.textContent='—'; gapEl.className='val'; btcEl.className='val';
   }
 
-  // احتمالات مبنية على CDF طبيعي باستخدام EM$
   if(S!=null && PTB!=null && emUSD!=null && emUSD>0){
-    const z=(PTB - S)/emUSD;        // فرق بالدولار مقسوم على EM$
-    const reach = 1 - normCdf(z);   // P(S_T >= PTB)
+    const z=(PTB - S)/emUSD;            // كم EM$ نحتاج
+    const reach = 1 - normCdf(z);       // احتمال الإغلاق ≥ PTB
     const up=reach, down=1-reach;
 
-    reachEl.textContent = (reach*100).toFixed(1)+'%';
-    upEl.textContent    = (up*100).toFixed(1)+'%';
-    dnEl.textContent    = (down*100).toFixed(1)+'%';
+    // فرق عن 50% + لون
+    let reachDiff = (reach*100) - 50;
+    const sign = reachDiff>0 ? '+' : (reachDiff<0 ? '−' : '');
+    reachEl.textContent = `${sign}${Math.abs(reachDiff).toFixed(1)}% (z = ${z.toFixed(2)})`;
+    reachEl.className   = `val ${reachDiff>0?'green':(reachDiff<0?'red':'')}`;
 
-    // ألوان Up/Down: الأكبر يلوّن
+    upEl.textContent = (up*100).toFixed(1)+'%';
+    dnEl.textContent = (down*100).toFixed(1)+'%';
+
     if(up>down){ upEl.className='val green'; dnEl.className='val'; }
     else if(down>up){ dnEl.className='val red'; upEl.className='val'; }
-    else{ upEl.className='val'; dnEl.className='val'; }
-  }else{
-    reachEl.textContent='—'; upEl.textContent='—'; dnEl.textContent='—';
+    else { upEl.className='val'; dnEl.className='val'; }
+  } else {
+    reachEl.textContent='—'; reachEl.className='val';
+    upEl.textContent='—'; dnEl.textContent='—';
     upEl.className='val'; dnEl.className='val';
   }
 
@@ -193,8 +193,8 @@ function render(){
   const {startMsUTC, minsLeft}=getHourWindowET();
   currHourStartUTCms=startMsUTC; minutesLeft=minsLeft;
   PTB=await fetchHourOpen(startMsUTC);
-  await watchMinute();   // يحسب تقلب مبدئي
-  startWS();             // سعر مباشر
+  await watchMinute();
+  startWS();
   setInterval(everySecond, 1000);
   setInterval(watchMinute, 5000);
   render();
