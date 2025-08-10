@@ -2,35 +2,117 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-<title>BTC Up/Down Hybrid</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"/>
+<title>BTC Up/Down — Dark</title>
 <script src="https://cdn.jsdelivr.net/npm/luxon@3/build/global/luxon.min.js"></script>
+
 <style>
-  body{background:#0f172a;color:#fff;font-family:sans-serif;padding:20px}
-  .wrap{max-width:500px;margin:auto}
-  .kpi{display:flex;justify-content:space-between;padding:8px;background:#1e293b;margin:5px 0;border-radius:8px}
-  .pos{color:#4ade80}
-  .neg{color:#f87171}
-  .gapPos{color:#22c55e;font-weight:bold}
-  .gapNeg{color:#ef4444;font-weight:bold}
-  .warn{color:#facc15;font-weight:bold}
+  /* ======== Dark Normal Theme (fills mobile screen) ======== */
+  :root{
+    --bg:#121212;        /* خلفية داكنة عادية */
+    --panel:#1e1e1e;     /* كروت داكنة */
+    --border:#2a2a2a;    /* حدود خفيفة */
+    --text:#e0e0e0;      /* نص رئيسي */
+    --muted:#a9a9a9;     /* نص ثانوي */
+    --green:#4caf50;     /* موجب */
+    --red:#f44336;       /* سالب */
+    --amber:#ffca28;     /* تحذير */
+  }
+
+  html,body{
+    height:100%;
+    margin:0;
+    background:var(--bg);
+    color:var(--text);
+    font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;
+  }
+
+  /* احتلال الشاشة بالكامل مع مراعاة الآمن في الهواتف */
+  .page{
+    min-height:100svh;
+    padding:16px;
+    padding-bottom:calc(16px + env(safe-area-inset-bottom));
+    box-sizing:border-box;
+    display:flex;
+    flex-direction:column;
+    gap:12px;
+  }
+
+  .title{
+    margin:2px 2px 4px;
+    font-size:22px;
+    font-weight:700;
+    color:#fff;
+    letter-spacing:.2px;
+  }
+  .sub{
+    margin:0 2px 8px;
+    color:var(--muted);
+    font-size:12px;
+  }
+
+  .grid{
+    display:grid;
+    grid-template-columns:1fr;
+    gap:10px;
+    flex:1;                 /* تمدد لتعبئة الشاشة */
+  }
+
+  .kpi{
+    background:var(--panel);
+    border:1px solid var(--border);
+    border-radius:14px;
+    padding:14px 16px;
+    display:grid;
+    grid-template-columns:1fr auto;
+    align-items:center;
+    gap:10px;
+  }
+  .kpi span{
+    color:var(--muted);
+    font-size:12px;
+    text-transform:uppercase;
+    letter-spacing:.5px;
+  }
+  .kpi b{
+    font-size:18px;
+    font-weight:700;
+  }
+
+  .pos{color:var(--green)}
+  .neg{color:var(--red)}
+  .warn{color:var(--amber)}
+  .gapPos{color:var(--green);font-weight:800}
+  .gapNeg{color:var(--red);font-weight:800}
+
+  /* تكبير الأرقام قليلًا على الشاشات الصغيرة */
+  @media (max-width:420px){
+    .kpi{padding:13px 14px}
+    .kpi b{font-size:17px}
+  }
 </style>
 </head>
 <body>
-<div class="wrap">
-  <div class="kpi"><span>Price</span><b id="price">—</b></div>
-  <div class="kpi"><span>Price to Beat</span><b id="ptb">—</b></div>
-  <div class="kpi"><span>Time Left</span><b id="timeLeft">—</b></div>
-  <div class="kpi"><span>Gap to Beat ($)</span><b id="gap">—</b></div>
-  <div class="kpi"><span>Expected Move ($)</span><b id="expMove">—</b></div>
-  <div class="kpi"><span>Strength (%)</span><b id="strength">—</b></div>
-  <div class="kpi"><span>Up %</span><b id="upPct" class="pos">—</b></div>
-  <div class="kpi"><span>Down %</span><b id="downPct" class="neg">—</b></div>
-</div>
+  <div class="page">
+    <h1 class="title">BTC Up/Down — Hybrid</h1>
+    <div class="sub">Live from Binance · Hour window (ET)</div>
+
+    <div class="grid">
+      <div class="kpi"><span>Price</span><b id="price">—</b></div>
+      <div class="kpi"><span>Price to Beat</span><b id="ptb">—</b></div>
+      <div class="kpi"><span>Time Left</span><b id="timeLeft">—</b></div>
+      <div class="kpi"><span>Gap to Beat ($)</span><b id="gap">—</b></div>
+      <div class="kpi"><span>Expected Move ($)</span><b id="expMove">—</b></div>
+      <div class="kpi"><span>Strength (%)</span><b id="strength">—</b></div>
+      <div class="kpi"><span>Up %</span><b id="upPct" class="pos">—</b></div>
+      <div class="kpi"><span>Down %</span><b id="downPct" class="neg">—</b></div>
+    </div>
+  </div>
 
 <script>
+/* ======== Logic (كما اتفقنا) ======== */
 const { DateTime } = luxon;
-let price = null, ptb = null, sigmaAnn = null;
+let price=null, ptb=null, sigmaAnn=null;
 
 function getHourWindowET(){
   const nowET = DateTime.now().setZone('America/New_York');
@@ -43,46 +125,35 @@ async function fetchPTB(){
   const { startET } = getHourWindowET();
   const startMsUTC = startET.toUTC().toMillis();
   const url = `https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1h&startTime=${startMsUTC}&limit=1`;
-  const r = await fetch(url);
-  const j = await r.json();
+  const r = await fetch(url); const j = await r.json();
   if(j && j.length) ptb = parseFloat(j[0][1]);
 }
 
 async function fetchCloses(mins){
   const url = `https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1m&limit=${mins}`;
-  const r = await fetch(url);
-  const j = await r.json();
+  const r = await fetch(url); const j = await r.json();
   return j.map(c=>+c[4]);
 }
-
-function stdDev(arr){
-  const mean = arr.reduce((a,b)=>a+b,0)/arr.length;
-  return Math.sqrt(arr.reduce((a,b)=>a+(b-mean)**2,0)/arr.length);
+function stdDev(a){ const m=a.reduce((x,y)=>x+y,0)/a.length;
+  return Math.sqrt(a.reduce((s,v)=>s+(v-m)*(v-m),0)/a.length);
 }
-
 function annualizedVol(closes){
-  const rets = [];
-  for(let i=1;i<closes.length;i++){
-    rets.push(Math.log(closes[i]/closes[i-1]));
-  }
-  const sigmaPerMin = stdDev(rets);
-  return sigmaPerMin * Math.sqrt(525600);
+  const rets=[]; for(let i=1;i<closes.length;i++) rets.push(Math.log(closes[i]/closes[i-1]));
+  const sigmaPerMin = stdDev(rets);            // σ_1min (log-returns)
+  return sigmaPerMin * Math.sqrt(525600);      // سنويًا
 }
-
 async function fetchHybridVol(){
-  const short = await fetchCloses(5);
-  const long = await fetchCloses(60);
-  const sigS = annualizedVol(short);
-  const sigL = annualizedVol(long);
-  sigmaAnn = 0.7*sigS + 0.3*sigL;
+  const s = await fetchCloses(5);
+  const l = await fetchCloses(60);
+  sigmaAnn = 0.7*annualizedVol(s) + 0.3*annualizedVol(l);
 }
 
 function expectedMove(S, sigma, secsLeft){
-  const T = secsLeft / 31536000;
+  const T = secsLeft / 31536000;               // سنة = 365*24*3600
   return S * sigma * Math.sqrt(T);
 }
 
-/* Normal CDF without Math.erf (Abramowitz–Stegun 7.1.26) */
+/* Normal CDF (بدون Math.erf) */
 function normCdf(z){
   const sign = z < 0 ? -1 : 1;
   const x = Math.abs(z) / Math.sqrt(2);
@@ -93,28 +164,25 @@ function normCdf(z){
   return 0.5 * (1 + erf);
 }
 
+/* WebSocket للسعر الحي */
 const ws = new WebSocket('wss://stream.binance.com:9443/ws/btcusdt@trade');
-ws.onmessage = e => {
-  const data = JSON.parse(e.data);
-  price = parseFloat(data.p);
-  render();
-};
+ws.onmessage = e => { const d = JSON.parse(e.data); price = parseFloat(d.p); render(); };
 
 function render(){
   if(price!==null) document.getElementById('price').textContent = price.toFixed(2);
-  if(ptb!==null) document.getElementById('ptb').textContent = ptb.toFixed(2);
+  if(ptb!==null)   document.getElementById('ptb').textContent   = ptb.toFixed(2);
 
   const { endET, nowET } = getHourWindowET();
   const secsLeft = Math.max(0, Math.floor(endET.diff(nowET,'seconds').seconds));
-  const mins = String(Math.floor(secsLeft/60)).padStart(2,'0');
-  const secs = String(secsLeft%60).padStart(2,'0');
-  document.getElementById('timeLeft').textContent = `${mins}:${secs}`;
+  const mm = String(Math.floor(secsLeft/60)).padStart(2,'0');
+  const ss = String(secsLeft%60).padStart(2,'0');
+  document.getElementById('timeLeft').textContent = `${mm}:${ss}`;
 
   if(price!==null && ptb!==null){
     const gap = price - ptb;
     const gapEl = document.getElementById('gap');
     gapEl.textContent = `${gap>=0?'+':''}${gap.toFixed(2)}`;
-    gapEl.className = gap>=0?'gapPos':'gapNeg';
+    gapEl.className = gap>=0 ? 'gapPos' : 'gapNeg';
 
     if(sigmaAnn!==null){
       const em = expectedMove(price, sigmaAnn, secsLeft);
@@ -122,39 +190,39 @@ function render(){
       emEl.textContent = em.toFixed(2);
 
       const gapAbs = Math.abs(gap);
-      if(em > gapAbs * 1.1) emEl.className = 'pos';
-      else if(em < gapAbs * 0.9) emEl.className = 'neg';
-      else emEl.className = 'warn';
+      if(em > gapAbs*1.1) emEl.className='pos';
+      else if(em < gapAbs*0.9) emEl.className='neg';
+      else emEl.className='warn';
 
       // Strength %
-      let strength = (gapAbs === 0) ? (em/price)*100 : (em/gapAbs)*100;
-      const strEl = document.getElementById('strength');
-      strEl.textContent = isFinite(strength) ? strength.toFixed(1)+'%' : '∞';
-      if(strength > 110) strEl.className = 'pos';
-      else if(strength < 90) strEl.className = 'neg';
-      else strEl.className = 'warn';
+      let strength = (gapAbs===0) ? (em/price)*100 : (em/gapAbs)*100;
+      const sEl = document.getElementById('strength');
+      sEl.textContent = isFinite(strength) ? strength.toFixed(1)+'%' : '∞';
+      if(strength>110) sEl.className='pos';
+      else if(strength<90) sEl.className='neg';
+      else sEl.className='warn';
 
-      // Probabilities (guard when EM tiny)
+      // Up / Down %
       let pUp, pDown;
-      if(em < 1e-6){
-        pUp = 0.5; pDown = 0.5;
-      } else {
+      if(em < 1e-6){ pUp=0.5; pDown=0.5; }
+      else{
         const z = (ptb - price) / em;
-        pUp = 1 - normCdf(z);
-        pUp = Math.max(0.01, Math.min(0.99, pUp));
+        pUp = Math.max(0.01, Math.min(0.99, 1 - normCdf(z)));
         pDown = 1 - pUp;
       }
-      document.getElementById('upPct').textContent = (pUp*100).toFixed(1)+'%';
+      document.getElementById('upPct').textContent   = (pUp*100).toFixed(1)+'%';
       document.getElementById('downPct').textContent = (pDown*100).toFixed(1)+'%';
     }
   }
 }
 
-setInterval(fetchHybridVol, 5000);
-setInterval(fetchPTB, 3600000);
+/* تحديثات دورية */
+setInterval(fetchHybridVol, 5000);     // Vol
+setInterval(fetchPTB, 3600000);        // PTB كل ساعة
 
 fetchHybridVol();
 fetchPTB();
+render();
 </script>
 </body>
 </html>
