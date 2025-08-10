@@ -3,7 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>BTC Up/Down — One-File PWA</title>
+<title>BTC Up/Down — Hybrid</title>
+<link rel="manifest" href="manifest.webmanifest">
 <meta name="theme-color" content="#121212">
 <script src="https://cdn.jsdelivr.net/npm/luxon@3/build/global/luxon.min.js"></script>
 <style>
@@ -48,45 +49,9 @@
   </div>
 
 <script>
-/* ========== PWA (manifest + service worker) in one file ========== */
-// أيقونات PNG صغيرة مُضمنة كـ data URI (تكفي لتفعيل التثبيت)
-const ICON_PNG_192 =
-  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAMwAAADMAQAAAABp6b3VAAAACXBIWXMAAAsSAAALEgHS3X78AAABGUlEQVR4nO2WwQ3CMBRE01w1cTn1Qy1bqg0GqvC3k3U2w7YqJY5zjC1+2h0e9z3oWgWk2+qg6g4vK0h1q+SgJWkO8gQn9yG8E1y2+HhQmY0v1Q1c1yS7yS3d13N1w2r2XkQe7G4U4eP3mKp7d4k6QwqZl6C5i6wB0Qn8m9wzv+Z0j8j3k5k3Zxj2w2Z8w2vF8VqjW8k7i6kq6mJgQwq8KJmX5yPMaT2wI3x8Xqk0P3FQ9w9m9gQh4eEPH0gkQ0sPj5iYtQGq5HkQkAAAgAAAgAAAgAAAgAAAgAAAgAAAgAABdXHc9Y2kE8g7gqQ6cG1m3Hq6b5m0m8Q2mWgH4b0Gk3mKX1H1cQzv1G0E8nGkQk2bF3t8o7x8Q5qg3wH9mWk0+J1y9mAAAAAElFTkSuQmCC";
-const ICON_PNG_512 = ICON_PNG_192; // نعيد استخدام نفس الصورة (يكفي للتثبيت)
-
-(function injectManifestAndSW(){
-  const manifest = {
-    name: "BTC Up/Down Helper",
-    short_name: "BTC Helper",
-    start_url: "./index.html",
-    display: "standalone",
-    background_color: "#121212",
-    theme_color: "#121212",
-    description: "Live BTC, Price-to-Beat, Expected Move & Probabilities.",
-    icons: [
-      { src: ICON_PNG_192, sizes: "192x192", type: "image/png" },
-      { src: ICON_PNG_512, sizes: "512x512", type: "image/png" }
-    ]
-  };
-  const mBlob = new Blob([JSON.stringify(manifest)], {type:"application/json"});
-  const mUrl = URL.createObjectURL(mBlob);
-  const link = document.createElement("link");
-  link.rel = "manifest"; link.href = mUrl;
-  document.head.appendChild(link);
-
-  const swCode = `
-    const CACHE='btc-onefile-v1';
-    const FILES=['./'];
-    self.addEventListener('install',e=>{e.waitUntil(caches.open(CACHE).then(c=>c.addAll(FILES)))});
-    self.addEventListener('fetch',e=>{e.respondWith(caches.match(e.request).then(r=>r||fetch(e.request)))});
-  `;
-  if('serviceWorker' in navigator){
-    const swBlob = new Blob([swCode], {type:'text/javascript'});
-    const swUrl = URL.createObjectURL(swBlob);
-    navigator.serviceWorker.register(swUrl).catch(()=>{});
-  }
-})();
-/* ================================================================ */
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('./sw.js').catch(()=>{});
+}
 
 const { DateTime } = luxon;
 let price=null, ptb=null, sigmaAnn=null;
@@ -118,7 +83,7 @@ function stdDev(a){ const m=a.reduce((x,y)=>x+y,0)/a.length;
 function annualizedVolFromCloses(closes){
   const rets=[]; for(let i=1;i<closes.length;i++) rets.push(Math.log(closes[i]/closes[i-1]));
   const sigmaPerMin = stdDev(rets); // log-return stdev per minute
-  return sigmaPerMin * Math.sqrt(525600); // دقائق السنة
+  return sigmaPerMin * Math.sqrt(525600); // minutes/year
 }
 async function fetchHybridVol(){
   try{
@@ -126,12 +91,12 @@ async function fetchHybridVol(){
     const s60 = await fetchCloses(60);
     const v5  = annualizedVolFromCloses(s5);
     const v60 = annualizedVolFromCloses(s60);
-    sigmaAnn = 0.7*v5 + 0.3*v60; // مزج أقصر + أطول
-  }catch(e){ /* تجاهل مؤقت */ }
+    sigmaAnn = 0.7*v5 + 0.3*v60;
+  }catch(e){ /* ignore */ }
 }
 
 function expectedMove(S, sigmaAnn, secsLeft){
-  const T = Math.max(0, secsLeft) / 31536000; // سنة = 365*24*3600
+  const T = Math.max(0, secsLeft) / 31536000; // seconds/year
   return S * sigmaAnn * Math.sqrt(T);
 }
 function normCdf(z){
@@ -140,7 +105,6 @@ function normCdf(z){
   const y=1-(((((a5*t+a4)*t+a3)*t+a2)*t+a1)*t)*Math.exp(-x*x); const erf=sign*y; return 0.5*(1+erf);
 }
 
-// WebSocket للسعر اللحظي
 const ws = new WebSocket('wss://stream.binance.com:9443/ws/btcusdt@trade');
 ws.onmessage = e => { const d = JSON.parse(e.data); price = parseFloat(d.p); render(); };
 
@@ -157,42 +121,36 @@ function render(){
   if(price!==null) priceEl.textContent = price.toFixed(2);
   if(ptb!==null)   ptbEl.textContent   = ptb.toFixed(2);
 
-  // الوقت المتبقي (ثواني → mm:ss)
   const { endET, nowET } = getHourWindowET();
   const secsLeft = Math.max(0, Math.floor(endET.diff(nowET,'seconds').seconds));
   const mm = String(Math.floor(secsLeft/60)).padStart(2,'0');
   const ss = String(secsLeft%60).padStart(2,'0');
   document.getElementById('timeLeft').textContent = `${mm}:${ss}`;
 
-  // Gap + ألوان
   if(price!==null && ptb!==null){
     const gap = price - ptb;
     gapEl.textContent = `${gap>=0?'+':''}${gap.toFixed(2)}`;
     gapEl.className = gap>=0 ? 'gapPos' : 'gapNeg';
 
     if(sigmaAnn!==null){
-      // Expected Move يتناقص مع الوقت عبر مربع جذر T
       const em = expectedMove(price, sigmaAnn, secsLeft);
       emEl.textContent = em.toFixed(2);
 
-      // لون EM مقابل الفجوة
       const gapAbs = Math.abs(gap);
       if(em > gapAbs*1.1) emEl.className='pos';
       else if(em < gapAbs*0.9) emEl.className='neg';
       else emEl.className='warn';
 
-      // قوة التحرك نسبةً للفجوة
       let strength = (gapAbs===0) ? (em/price)*100 : (em/gapAbs)*100;
       strEl.textContent = isFinite(strength) ? strength.toFixed(1)+'%' : '∞';
       if(strength>110) strEl.className='pos';
       else if(strength<90) strEl.className='neg';
       else strEl.className='warn';
 
-      // احتمالات Up/Down من توزيع طبيعي قياسي
       let pUp,pDown;
       if(em < 1e-6){ pUp=0.5; pDown=0.5; }
       else{
-        const z = (ptb - price) / em; // كم انحراف معياري نحتاج
+        const z = (ptb - price) / em;
         pUp = Math.max(0.01, Math.min(0.99, 1 - normCdf(z)));
         pDown = 1 - pUp;
       }
@@ -206,9 +164,8 @@ function render(){
   stampEl.textContent = `Last update: ${t} UTC · WebSocket: Binance · TZ: America/New_York (ET)`;
 }
 
-// دورات التحديث
-setInterval(fetchHybridVol, 5000);   // تقدير تذبذب هجين
-setInterval(fetchPTB, 3600000);      // سعر الافتتاح كل ساعة
+setInterval(fetchHybridVol, 5000);
+setInterval(fetchPTB, 3600000);
 fetchHybridVol(); fetchPTB(); render();
 </script>
 </body>
