@@ -1,95 +1,31 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"/>
-<title>BTC Up/Down — Dark</title>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>BTC Up/Down — One-File PWA</title>
+<meta name="theme-color" content="#121212">
 <script src="https://cdn.jsdelivr.net/npm/luxon@3/build/global/luxon.min.js"></script>
-
 <style>
-  /* ======== Dark Normal Theme (fills mobile screen) ======== */
   :root{
-    --bg:#121212;        /* خلفية داكنة عادية */
-    --panel:#1e1e1e;     /* كروت داكنة */
-    --border:#2a2a2a;    /* حدود خفيفة */
-    --text:#e0e0e0;      /* نص رئيسي */
-    --muted:#a9a9a9;     /* نص ثانوي */
-    --green:#4caf50;     /* موجب */
-    --red:#f44336;       /* سالب */
-    --amber:#ffca28;     /* تحذير */
+    --bg:#121212;--panel:#1e1e1e;--border:#2a2a2a;--text:#e9e9e9;--muted:#a8a8a8;
+    --green:#4caf50;--red:#ef5350;--amber:#ffca28;
   }
-
-  html,body{
-    height:100%;
-    margin:0;
-    background:var(--bg);
-    color:var(--text);
-    font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;
-  }
-
-  /* احتلال الشاشة بالكامل مع مراعاة الآمن في الهواتف */
-  .page{
-    min-height:100svh;
-    padding:16px;
-    padding-bottom:calc(16px + env(safe-area-inset-bottom));
-    box-sizing:border-box;
-    display:flex;
-    flex-direction:column;
-    gap:12px;
-  }
-
-  .title{
-    margin:2px 2px 4px;
-    font-size:22px;
-    font-weight:700;
-    color:#fff;
-    letter-spacing:.2px;
-  }
-  .sub{
-    margin:0 2px 8px;
-    color:var(--muted);
-    font-size:12px;
-  }
-
-  .grid{
-    display:grid;
-    grid-template-columns:1fr;
-    gap:10px;
-    flex:1;                 /* تمدد لتعبئة الشاشة */
-  }
-
-  .kpi{
-    background:var(--panel);
-    border:1px solid var(--border);
-    border-radius:14px;
-    padding:14px 16px;
-    display:grid;
-    grid-template-columns:1fr auto;
-    align-items:center;
-    gap:10px;
-  }
-  .kpi span{
-    color:var(--muted);
-    font-size:12px;
-    text-transform:uppercase;
-    letter-spacing:.5px;
-  }
-  .kpi b{
-    font-size:18px;
-    font-weight:700;
-  }
-
-  .pos{color:var(--green)}
-  .neg{color:var(--red)}
-  .warn{color:var(--amber)}
-  .gapPos{color:var(--green);font-weight:800}
-  .gapNeg{color:var(--red);font-weight:800}
-
-  /* تكبير الأرقام قليلًا على الشاشات الصغيرة */
-  @media (max-width:420px){
-    .kpi{padding:13px 14px}
-    .kpi b{font-size:17px}
-  }
+  html,body{height:100%;margin:0;background:var(--bg);color:var(--text);
+    font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif}
+  .page{min-height:100svh;display:flex;flex-direction:column;gap:12px;
+    padding:16px;box-sizing:border-box;padding-bottom:calc(20px + env(safe-area-inset-bottom))}
+  .title{margin:0 2px 2px;font-size:22px;font-weight:800;letter-spacing:.2px}
+  .sub{margin:0 2px 8px;color:var(--muted);font-size:12px}
+  .grid{display:grid;grid-template-columns:1fr;gap:10px}
+  .kpi{background:var(--panel);border:1px solid var(--border);border-radius:14px;
+    padding:14px 16px;display:grid;grid-template-columns:1fr auto;align-items:center;gap:8px}
+  .kpi span{color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.5px}
+  .kpi b{font-size:18px;font-weight:800}
+  .pos{color:var(--green)} .neg{color:var(--red)} .warn{color:var(--amber)}
+  .gapPos{color:var(--green);font-weight:900} .gapNeg{color:var(--red);font-weight:900}
+  @media (max-width:420px){.kpi{padding:12px 14px}.kpi b{font-size:17px}}
+  .foot{margin-top:6px;color:var(--muted);font-size:12px;text-align:center}
 </style>
 </head>
 <body>
@@ -107,10 +43,51 @@
       <div class="kpi"><span>Up %</span><b id="upPct" class="pos">—</b></div>
       <div class="kpi"><span>Down %</span><b id="downPct" class="neg">—</b></div>
     </div>
+
+    <div class="foot" id="stamp">—</div>
   </div>
 
 <script>
-/* ======== Logic (كما اتفقنا) ======== */
+/* ========== PWA (manifest + service worker) in one file ========== */
+// أيقونات PNG صغيرة مُضمنة كـ data URI (تكفي لتفعيل التثبيت)
+const ICON_PNG_192 =
+  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAMwAAADMAQAAAABp6b3VAAAACXBIWXMAAAsSAAALEgHS3X78AAABGUlEQVR4nO2WwQ3CMBRE01w1cTn1Qy1bqg0GqvC3k3U2w7YqJY5zjC1+2h0e9z3oWgWk2+qg6g4vK0h1q+SgJWkO8gQn9yG8E1y2+HhQmY0v1Q1c1yS7yS3d13N1w2r2XkQe7G4U4eP3mKp7d4k6QwqZl6C5i6wB0Qn8m9wzv+Z0j8j3k5k3Zxj2w2Z8w2vF8VqjW8k7i6kq6mJgQwq8KJmX5yPMaT2wI3x8Xqk0P3FQ9w9m9gQh4eEPH0gkQ0sPj5iYtQGq5HkQkAAAgAAAgAAAgAAAgAAAgAAAgAAAgAABdXHc9Y2kE8g7gqQ6cG1m3Hq6b5m0m8Q2mWgH4b0Gk3mKX1H1cQzv1G0E8nGkQk2bF3t8o7x8Q5qg3wH9mWk0+J1y9mAAAAAElFTkSuQmCC";
+const ICON_PNG_512 = ICON_PNG_192; // نعيد استخدام نفس الصورة (يكفي للتثبيت)
+
+(function injectManifestAndSW(){
+  const manifest = {
+    name: "BTC Up/Down Helper",
+    short_name: "BTC Helper",
+    start_url: "./index.html",
+    display: "standalone",
+    background_color: "#121212",
+    theme_color: "#121212",
+    description: "Live BTC, Price-to-Beat, Expected Move & Probabilities.",
+    icons: [
+      { src: ICON_PNG_192, sizes: "192x192", type: "image/png" },
+      { src: ICON_PNG_512, sizes: "512x512", type: "image/png" }
+    ]
+  };
+  const mBlob = new Blob([JSON.stringify(manifest)], {type:"application/json"});
+  const mUrl = URL.createObjectURL(mBlob);
+  const link = document.createElement("link");
+  link.rel = "manifest"; link.href = mUrl;
+  document.head.appendChild(link);
+
+  const swCode = `
+    const CACHE='btc-onefile-v1';
+    const FILES=['./'];
+    self.addEventListener('install',e=>{e.waitUntil(caches.open(CACHE).then(c=>c.addAll(FILES)))});
+    self.addEventListener('fetch',e=>{e.respondWith(caches.match(e.request).then(r=>r||fetch(e.request)))});
+  `;
+  if('serviceWorker' in navigator){
+    const swBlob = new Blob([swCode], {type:'text/javascript'});
+    const swUrl = URL.createObjectURL(swBlob);
+    navigator.serviceWorker.register(swUrl).catch(()=>{});
+  }
+})();
+/* ================================================================ */
+
 const { DateTime } = luxon;
 let price=null, ptb=null, sigmaAnn=null;
 
@@ -125,104 +102,114 @@ async function fetchPTB(){
   const { startET } = getHourWindowET();
   const startMsUTC = startET.toUTC().toMillis();
   const url = `https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1h&startTime=${startMsUTC}&limit=1`;
-  const r = await fetch(url); const j = await r.json();
-  if(j && j.length) ptb = parseFloat(j[0][1]);
+  const r = await fetch(url);
+  const j = await r.json();
+  if(Array.isArray(j) && j.length) ptb = parseFloat(j[0][1]); // open
 }
 
 async function fetchCloses(mins){
   const url = `https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1m&limit=${mins}`;
   const r = await fetch(url); const j = await r.json();
-  return j.map(c=>+c[4]);
+  return j.map(c=>+c[4]); // close
 }
 function stdDev(a){ const m=a.reduce((x,y)=>x+y,0)/a.length;
   return Math.sqrt(a.reduce((s,v)=>s+(v-m)*(v-m),0)/a.length);
 }
-function annualizedVol(closes){
+function annualizedVolFromCloses(closes){
   const rets=[]; for(let i=1;i<closes.length;i++) rets.push(Math.log(closes[i]/closes[i-1]));
-  const sigmaPerMin = stdDev(rets);            // σ_1min (log-returns)
-  return sigmaPerMin * Math.sqrt(525600);      // سنويًا
+  const sigmaPerMin = stdDev(rets); // log-return stdev per minute
+  return sigmaPerMin * Math.sqrt(525600); // دقائق السنة
 }
 async function fetchHybridVol(){
-  const s = await fetchCloses(5);
-  const l = await fetchCloses(60);
-  sigmaAnn = 0.7*annualizedVol(s) + 0.3*annualizedVol(l);
+  try{
+    const s5  = await fetchCloses(5);
+    const s60 = await fetchCloses(60);
+    const v5  = annualizedVolFromCloses(s5);
+    const v60 = annualizedVolFromCloses(s60);
+    sigmaAnn = 0.7*v5 + 0.3*v60; // مزج أقصر + أطول
+  }catch(e){ /* تجاهل مؤقت */ }
 }
 
-function expectedMove(S, sigma, secsLeft){
-  const T = secsLeft / 31536000;               // سنة = 365*24*3600
-  return S * sigma * Math.sqrt(T);
+function expectedMove(S, sigmaAnn, secsLeft){
+  const T = Math.max(0, secsLeft) / 31536000; // سنة = 365*24*3600
+  return S * sigmaAnn * Math.sqrt(T);
 }
-
-/* Normal CDF (بدون Math.erf) */
 function normCdf(z){
-  const sign = z < 0 ? -1 : 1;
-  const x = Math.abs(z) / Math.sqrt(2);
-  const t = 1 / (1 + 0.3275911 * x);
-  const a1=0.254829592, a2=-0.284496736, a3=1.421413741, a4=-1.453152027, a5=1.061405429;
-  const y = 1 - (((((a5*t + a4)*t + a3)*t + a2)*t + a1)*t) * Math.exp(-x*x);
-  const erf = sign * y;
-  return 0.5 * (1 + erf);
+  const sign=z<0?-1:1, x=Math.abs(z)/Math.sqrt(2), t=1/(1+0.3275911*x);
+  const a1=0.254829592,a2=-0.284496736,a3=1.421413741,a4=-1.453152027,a5=1.061405429;
+  const y=1-(((((a5*t+a4)*t+a3)*t+a2)*t+a1)*t)*Math.exp(-x*x); const erf=sign*y; return 0.5*(1+erf);
 }
 
-/* WebSocket للسعر الحي */
+// WebSocket للسعر اللحظي
 const ws = new WebSocket('wss://stream.binance.com:9443/ws/btcusdt@trade');
 ws.onmessage = e => { const d = JSON.parse(e.data); price = parseFloat(d.p); render(); };
 
 function render(){
-  if(price!==null) document.getElementById('price').textContent = price.toFixed(2);
-  if(ptb!==null)   document.getElementById('ptb').textContent   = ptb.toFixed(2);
+  const priceEl = document.getElementById('price');
+  const ptbEl   = document.getElementById('ptb');
+  const gapEl   = document.getElementById('gap');
+  const emEl    = document.getElementById('expMove');
+  const strEl   = document.getElementById('strength');
+  const upEl    = document.getElementById('upPct');
+  const dnEl    = document.getElementById('downPct');
+  const stampEl = document.getElementById('stamp');
 
+  if(price!==null) priceEl.textContent = price.toFixed(2);
+  if(ptb!==null)   ptbEl.textContent   = ptb.toFixed(2);
+
+  // الوقت المتبقي (ثواني → mm:ss)
   const { endET, nowET } = getHourWindowET();
   const secsLeft = Math.max(0, Math.floor(endET.diff(nowET,'seconds').seconds));
   const mm = String(Math.floor(secsLeft/60)).padStart(2,'0');
   const ss = String(secsLeft%60).padStart(2,'0');
   document.getElementById('timeLeft').textContent = `${mm}:${ss}`;
 
+  // Gap + ألوان
   if(price!==null && ptb!==null){
     const gap = price - ptb;
-    const gapEl = document.getElementById('gap');
     gapEl.textContent = `${gap>=0?'+':''}${gap.toFixed(2)}`;
     gapEl.className = gap>=0 ? 'gapPos' : 'gapNeg';
 
     if(sigmaAnn!==null){
+      // Expected Move يتناقص مع الوقت عبر مربع جذر T
       const em = expectedMove(price, sigmaAnn, secsLeft);
-      const emEl = document.getElementById('expMove');
       emEl.textContent = em.toFixed(2);
 
+      // لون EM مقابل الفجوة
       const gapAbs = Math.abs(gap);
       if(em > gapAbs*1.1) emEl.className='pos';
       else if(em < gapAbs*0.9) emEl.className='neg';
       else emEl.className='warn';
 
-      // Strength %
+      // قوة التحرك نسبةً للفجوة
       let strength = (gapAbs===0) ? (em/price)*100 : (em/gapAbs)*100;
-      const sEl = document.getElementById('strength');
-      sEl.textContent = isFinite(strength) ? strength.toFixed(1)+'%' : '∞';
-      if(strength>110) sEl.className='pos';
-      else if(strength<90) sEl.className='neg';
-      else sEl.className='warn';
+      strEl.textContent = isFinite(strength) ? strength.toFixed(1)+'%' : '∞';
+      if(strength>110) strEl.className='pos';
+      else if(strength<90) strEl.className='neg';
+      else strEl.className='warn';
 
-      // Up / Down %
-      let pUp, pDown;
+      // احتمالات Up/Down من توزيع طبيعي قياسي
+      let pUp,pDown;
       if(em < 1e-6){ pUp=0.5; pDown=0.5; }
       else{
-        const z = (ptb - price) / em;
+        const z = (ptb - price) / em; // كم انحراف معياري نحتاج
         pUp = Math.max(0.01, Math.min(0.99, 1 - normCdf(z)));
         pDown = 1 - pUp;
       }
-      document.getElementById('upPct').textContent   = (pUp*100).toFixed(1)+'%';
-      document.getElementById('downPct').textContent = (pDown*100).toFixed(1)+'%';
+      upEl.textContent = (pUp*100).toFixed(1)+'%';
+      dnEl.textContent = (pDown*100).toFixed(1)+'%';
+      upEl.className = 'pos'; dnEl.className='neg';
     }
   }
+
+  const t = new Date().toISOString().replace('T',' ').slice(0,19);
+  stampEl.textContent = `Last update: ${t} UTC · WebSocket: Binance · TZ: America/New_York (ET)`;
 }
 
-/* تحديثات دورية */
-setInterval(fetchHybridVol, 5000);     // Vol
-setInterval(fetchPTB, 3600000);        // PTB كل ساعة
-
-fetchHybridVol();
-fetchPTB();
-render();
+// دورات التحديث
+setInterval(fetchHybridVol, 5000);   // تقدير تذبذب هجين
+setInterval(fetchPTB, 3600000);      // سعر الافتتاح كل ساعة
+fetchHybridVol(); fetchPTB(); render();
 </script>
 </body>
 </html>
