@@ -82,8 +82,15 @@ function expectedMove(S, sigma, secsLeft){
   return S * sigma * Math.sqrt(T);
 }
 
-function cdf(x){
-  return (1 + Math.erf(x / Math.sqrt(2))) / 2;
+/* Normal CDF without Math.erf (Abramowitz–Stegun 7.1.26) */
+function normCdf(z){
+  const sign = z < 0 ? -1 : 1;
+  const x = Math.abs(z) / Math.sqrt(2);
+  const t = 1 / (1 + 0.3275911 * x);
+  const a1=0.254829592, a2=-0.284496736, a3=1.421413741, a4=-1.453152027, a5=1.061405429;
+  const y = 1 - (((((a5*t + a4)*t + a3)*t + a2)*t + a1)*t) * Math.exp(-x*x);
+  const erf = sign * y;
+  return 0.5 * (1 + erf);
 }
 
 const ws = new WebSocket('wss://stream.binance.com:9443/ws/btcusdt@trade');
@@ -120,24 +127,23 @@ function render(){
       else emEl.className = 'warn';
 
       // Strength %
-      let strength;
-      if(gapAbs === 0){
-        strength = (em / price) * 100;
-      } else {
-        strength = (em / gapAbs) * 100;
-      }
+      let strength = (gapAbs === 0) ? (em/price)*100 : (em/gapAbs)*100;
       const strEl = document.getElementById('strength');
-      strEl.textContent = isFinite(strength) ? strength.toFixed(1) + '%' : '∞';
+      strEl.textContent = isFinite(strength) ? strength.toFixed(1)+'%' : '∞';
       if(strength > 110) strEl.className = 'pos';
       else if(strength < 90) strEl.className = 'neg';
       else strEl.className = 'warn';
 
-      // Up / Down %
-      const z = (ptb - price) / em;
-      let pUp = 1 - cdf(z);
-      pUp = Math.max(0.01, Math.min(0.99, pUp));
-      const pDown = 1 - pUp;
-
+      // Probabilities (guard when EM tiny)
+      let pUp, pDown;
+      if(em < 1e-6){
+        pUp = 0.5; pDown = 0.5;
+      } else {
+        const z = (ptb - price) / em;
+        pUp = 1 - normCdf(z);
+        pUp = Math.max(0.01, Math.min(0.99, pUp));
+        pDown = 1 - pUp;
+      }
       document.getElementById('upPct').textContent = (pUp*100).toFixed(1)+'%';
       document.getElementById('downPct').textContent = (pDown*100).toFixed(1)+'%';
     }
